@@ -25,8 +25,8 @@ interface Candidate {
   created?: string;
   body?: string;
   confidence?: string | number;
-  tags?: string;
-  sources?: string;
+  tags?: string | string[];
+  sources?: string | string[];
   approved_at?: string;
   rejected_at?: string;
   rejection_reason?: string;
@@ -97,8 +97,9 @@ function formatDate(value?: string): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(date);
 }
 
-function parseList(value?: string): string[] {
+function parseList(value?: string | string[]): string[] {
   if (!value) return [];
+  if (Array.isArray(value)) return value.map(String).filter(Boolean);
   return value
     .replace(/^\[|\]$/g, '')
     .split(',')
