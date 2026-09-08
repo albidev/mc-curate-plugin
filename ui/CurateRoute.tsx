@@ -218,9 +218,8 @@ export function CurateRoute() {
       ]);
       setCandidates(candidatePayload.candidates || []);
       setVaults(vaultPayload.vaults || []);
-      setSelectedId((current) => current && candidatePayload.candidates.some((candidate) => candidate.id === current)
-        ? current
-        : candidatePayload.candidates[0]?.id || null);
+      // Details are opt-in: never open a candidate automatically on load.
+      setSelectedId(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Curate could not load its data.');
     } finally {
@@ -232,6 +231,15 @@ export function CurateRoute() {
   useEffect(() => {
     if (token) void load();
   }, [load, token]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSelectedId(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selectedId]);
 
   const chooseVault = (vaultId: string) => {
     setSelectedVault(vaultId);
@@ -341,12 +349,18 @@ export function CurateRoute() {
         {loading ? (
           <div className="flex min-h-64 items-center justify-center gap-2 text-sm text-text-muted"><Loader2 size={17} className="animate-spin" /> Loading candidate queue…</div>
         ) : (
-          <section className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
-            <div className="flex min-w-0 flex-col gap-3"><div className="flex items-center justify-between"><div><p className="text-sm font-semibold text-text">Candidate queue</p><p className="text-xs text-text-muted">{visibleCandidates.length} of {candidates.length} candidates visible</p></div><span className="rounded-full bg-white/[0.06] px-2.5 py-1 text-xs text-text-muted">{statusFilter === 'all' ? 'All candidates' : statusLabel(statusFilter)}</span></div>{visibleCandidates.length ? visibleCandidates.map((candidate) => <CandidateCard key={candidate.id} candidate={candidate} selected={candidate.id === selectedId} onSelect={() => setSelectedId(candidate.id)} />) : <div className="rounded-2xl border border-dashed border-white/10 px-5 py-12 text-center"><ClipboardCheck size={28} className="mx-auto text-text-subtle" /><p className="mt-3 text-sm font-medium text-text">No candidates match</p><p className="mt-1 text-xs text-text-muted">Try another status, vault, or search term.</p></div>}</div>
-            <CandidateDetail candidate={selectedCandidate} actionId={actionId} onApprove={(candidate) => void performAction(candidate, 'approve')} onReject={(candidate) => { setRejecting(candidate); setRejectReason(''); }} />
+          <section className="flex min-w-0 flex-col gap-3">
+            <div className="flex items-center justify-between"><div><p className="text-sm font-semibold text-text">Candidate queue</p><p className="text-xs text-text-muted">{visibleCandidates.length} of {candidates.length} candidates visible</p></div><span className="rounded-full bg-white/[0.06] px-2.5 py-1 text-xs text-text-muted">{statusFilter === 'all' ? 'All candidates' : statusLabel(statusFilter)}</span></div>
+            {visibleCandidates.length ? visibleCandidates.map((candidate) => <CandidateCard key={candidate.id} candidate={candidate} selected={candidate.id === selectedId} onSelect={() => setSelectedId(candidate.id)} />) : <div className="rounded-2xl border border-dashed border-white/10 px-5 py-12 text-center"><ClipboardCheck size={28} className="mx-auto text-text-subtle" /><p className="mt-3 text-sm font-medium text-text">No candidates match</p><p className="mt-1 text-xs text-text-muted">Try another status, vault, or search term.</p></div>}
           </section>
         )}
       </div>
+
+      {selectedCandidate && <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/65 p-0 sm:items-center sm:p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedId(null); }}>
+        <div role="dialog" aria-modal="true" aria-labelledby="curate-candidate-title" className="max-h-[92vh] w-full overflow-hidden rounded-t-3xl border border-white/10 bg-surface shadow-2xl sm:max-w-3xl sm:rounded-3xl">
+          <CandidateDetail candidate={selectedCandidate} actionId={actionId} onClose={() => setSelectedId(null)} onApprove={(candidate) => void performAction(candidate, 'approve')} onReject={(candidate) => { setRejecting(candidate); setRejectReason(''); }} />
+        </div>
+      </div>}
 
       {rejecting && <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 sm:items-center"><form onSubmit={(event) => { event.preventDefault(); void performAction(rejecting, 'reject', rejectReason.trim()); }} className="w-full max-w-lg rounded-2xl border border-white/10 bg-surface p-5 shadow-2xl"><div className="flex items-start justify-between gap-4"><div><p className="text-base font-semibold text-text">Reject candidate</p><p className="mt-1 text-sm text-text-muted">Give the nightly brain useful feedback for the next run.</p></div><button type="button" onClick={() => setRejecting(null)} className="rounded-lg p-1 text-text-muted hover:bg-white/[0.06] hover:text-text"><X size={18} /></button></div><textarea autoFocus value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} placeholder="Why should this candidate be rejected?" className="mt-4 min-h-28 w-full resize-y rounded-xl border border-white/10 bg-black/10 p-3 text-sm text-text outline-none placeholder:text-text-subtle focus:border-rose-400/40" /><div className="mt-4 flex justify-end gap-2"><Button variant="ghost" onClick={() => setRejecting(null)}>Cancel</Button><Button type="submit" variant="danger" disabled={!rejectReason.trim() || actionId === rejecting.id}>{actionId === rejecting.id && <Loader2 size={15} className="animate-spin" />} Reject candidate</Button></div></form></div>}
     </div>
@@ -356,25 +370,26 @@ export function CurateRoute() {
 function CandidateDetail({
   candidate,
   actionId,
+  onClose,
   onApprove,
   onReject,
 }: {
-  candidate: Candidate | null;
+  candidate: Candidate;
   actionId: string | null;
+  onClose: () => void;
   onApprove: (candidate: Candidate) => void;
   onReject: (candidate: Candidate) => void;
 }) {
-  if (!candidate) return <aside className="sticky top-4 hidden rounded-2xl border border-dashed border-white/10 p-6 text-center text-sm text-text-muted xl:block"><ClipboardCheck size={26} className="mx-auto mb-3 text-text-subtle" /><p>Select a candidate to inspect it.</p></aside>;
   const confidence = confidenceValue(candidate);
   const tags = parseList(candidate.tags);
   const sources = parseList(candidate.sources);
   const isPending = candidate.status === 'pending' || candidate.status === 'pending_review';
 
-  return <aside className="sticky top-4 flex min-w-0 flex-col overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.025]">
-    <div className="border-b border-white/[0.08] p-5"><div className="flex items-center gap-2"><span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ${statusTone(candidate.status)}`}>{statusLabel(candidate.status)}</span>{candidate.type && <span className="text-[11px] uppercase tracking-[0.12em] text-text-subtle">{candidate.type}</span>}</div><h2 className="mt-3 text-xl font-semibold tracking-tight text-text">{candidate.title || candidate.id}</h2><p className="mt-2 break-all font-mono text-[10px] text-text-subtle">{candidate.id}</p></div>
-    <div className="max-h-[calc(100vh-230px)] overflow-y-auto p-5"><div className="grid grid-cols-2 gap-3"><Meta label="Created" value={formatDate(candidate.created)} /><Meta label="Confidence" value={confidence === null ? '—' : `${Math.round(confidence * 100)}%`} /><Meta label="Approved" value={formatDate(candidate.approved_at)} /><Meta label="Quarantine until" value={formatDate(candidate.quarantine_until)} /></div><div className="mt-5"><p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-subtle">Candidate content</p><div className="whitespace-pre-wrap rounded-xl border border-white/[0.08] bg-black/10 p-3 text-sm leading-6 text-text-muted">{candidate.body || 'No content available.'}</div></div>{tags.length > 0 && <DetailList label="Tags" items={tags} tone="sky" />}{sources.length > 0 && <DetailList label="Sources" items={sources} tone="neutral" />}{candidate.rejection_reason && <div className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 p-3"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-rose-300">Rejection feedback</p><p className="mt-2 text-sm leading-5 text-rose-100/80">{candidate.rejection_reason}</p></div>}</div>
-    {isPending && <div className="flex gap-2 border-t border-white/[0.08] p-4"><Button variant="danger" onClick={() => onReject(candidate)} disabled={actionId === candidate.id}><XCircle size={15} /> Reject</Button><Button variant="primary" onClick={() => onApprove(candidate)} disabled={actionId === candidate.id}>{actionId === candidate.id ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} Approve candidate</Button></div>}
-  </aside>;
+  return <div className="flex max-h-[92vh] min-h-0 flex-col">
+    <div className="flex items-start justify-between gap-4 border-b border-white/[0.08] p-5"><div className="min-w-0"><div className="flex items-center gap-2"><span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ${statusTone(candidate.status)}`}>{statusLabel(candidate.status)}</span>{candidate.type && <span className="text-[11px] uppercase tracking-[0.12em] text-text-subtle">{candidate.type}</span>}</div><h2 id="curate-candidate-title" className="mt-3 truncate text-xl font-semibold tracking-tight text-text">{candidate.title || candidate.id}</h2><p className="mt-2 break-all font-mono text-[10px] text-text-subtle">{candidate.id}</p></div><button type="button" aria-label="Close candidate details" onClick={onClose} className="rounded-xl p-2 text-text-muted hover:bg-white/[0.06] hover:text-text"><X size={19} /></button></div>
+    <div className="min-h-0 overflow-y-auto p-5"><div className="grid grid-cols-2 gap-3 sm:grid-cols-4"><Meta label="Created" value={formatDate(candidate.created)} /><Meta label="Confidence" value={confidence === null ? '—' : `${Math.round(confidence * 100)}%`} /><Meta label="Approved" value={formatDate(candidate.approved_at)} /><Meta label="Quarantine until" value={formatDate(candidate.quarantine_until)} /></div><div className="mt-5"><p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-subtle">Full note</p><article className="max-h-[48vh] overflow-y-auto whitespace-pre-wrap rounded-xl border border-white/[0.08] bg-black/10 p-3 text-sm leading-6 text-text-muted">{candidate.body || 'No content available.'}</article></div>{tags.length > 0 && <DetailList label="Tags" items={tags} tone="sky" />}{sources.length > 0 && <DetailList label="Sources" items={sources} tone="neutral" />}{candidate.rejection_reason && <div className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 p-3"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-rose-300">Rejection feedback</p><p className="mt-2 text-sm leading-5 text-rose-100/80">{candidate.rejection_reason}</p></div>}</div>
+    <div className="flex justify-end gap-2 border-t border-white/[0.08] p-4"><Button variant="ghost" onClick={onClose}>Close</Button>{isPending && <><Button variant="danger" onClick={() => onReject(candidate)} disabled={actionId === candidate.id}><XCircle size={15} /> Reject</Button><Button variant="primary" onClick={() => onApprove(candidate)} disabled={actionId === candidate.id}>{actionId === candidate.id ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} Approve candidate</Button></>}</div>
+  </div>;
 }
 
 function Meta({ label, value }: { label: string; value: string }) { return <div className="min-w-0"><p className="text-[10px] uppercase tracking-[0.12em] text-text-subtle">{label}</p><p className="mt-1 truncate text-xs text-text-muted">{value}</p></div>; }
