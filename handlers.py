@@ -46,6 +46,49 @@ def _default_candidates_dir() -> Path:
     return _vault_brain_dir() / "candidates"
 
 
+def _session_synthesis_proxy():
+    """Return the Mission Control proxy for BDH-owned session candidates."""
+    try:
+        import synthesis_activity_proxy
+    except ImportError:
+        return None
+    return synthesis_activity_proxy
+
+
+def _normalize_session_synthesis_candidate(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Adapt BDH's candidate contract to the Curate card contract."""
+    provenance = raw.get("provenance") if isinstance(raw.get("provenance"), dict) else {}
+    source_notes = provenance.get("source_notes")
+    if not isinstance(source_notes, list):
+        source_notes = []
+    return _json_safe({
+        "id": str(raw.get("candidate_id") or ""),
+        "candidate_id": str(raw.get("candidate_id") or ""),
+        "synthesis_id": str(raw.get("synthesis_id") or ""),
+        "session_id": str(raw.get("session_id") or ""),
+        "vault_id": str(raw.get("vault_id") or "core"),
+        "source": str(raw.get("source") or "session_synthesis"),
+        "title": str(raw.get("title") or ""),
+        "body": str(raw.get("definition") or ""),
+        "description": str(raw.get("definition") or ""),
+        "confidence": raw.get("confidence") or "",
+        "status": str(raw.get("status") or "pending_review"),
+        "created": raw.get("created_at"),
+        "created_at": raw.get("created_at"),
+        "sources": source_notes,
+        "provenance": provenance,
+        "extra": raw.get("extra") if isinstance(raw.get("extra"), dict) else {},
+    })
+
+
+def _load_session_synthesis_candidate(candidate_id: str, vault: Optional[str]):
+    proxy = _session_synthesis_proxy()
+    if proxy is None or (vault not in (None, "core")):
+        return None, None
+    candidate = proxy.get_synthesis_candidate(candidate_id, vault_id=vault or "core")
+    return candidate, proxy
+
+
 def _vaults_file() -> Path:
     return _vault_brain_dir() / "curate-vaults.yaml"
 
@@ -141,8 +184,8 @@ def list_vaults() -> List[Dict[str, Any]]:
             "read_only": not writable,
             "mode": mode,
             "candidate_count": len(candidates),
-            "pending_count": sum(1 for c in candidates if c.get("status") == "pending"),
-            "reviewed_count": sum(1 for c in candidates if c.get("status") != "pending"),
+            "pending_count": sum(1 for c in candidates if c.get("status") in {"pending", "pending_review"}),
+            "reviewed_count": sum(1 for c in candidates if c.get("status") not in {"pending", "pending_review"}),
         })
     return out
 
@@ -353,6 +396,25 @@ def _write_candidate(path: Path, meta: Dict[str, Any], body: str) -> None:
 
 
 def list_candidates(status: Optional[str] = None, vault: Optional[str] = None) -> List[Dict[str, Any]]:
+    # Core session_synthesis candidates are owned by BDH, not the legacy
+    # vault-brain markdown queue. Keep non-core/nightly candidates on the old
+    # path until their producers migrate too.
+    if vault in (None, "core"):
+        proxy = _session_synthesis_proxy()
+        if proxy is not None:
+            try:
+                snapshot = proxy.load_synthesis_candidates(vault_id="core", status=status)
+                raw_candidates = snapshot.get("candidates", []) if isinstance(snapshot, dict) else []
+                return [
+                    _normalize_session_synthesis_candidate(candidate)
+                    for candidate in raw_candidates
+                    if isinstance(candidate, dict)
+                ]
+            except Exception:
+                # BDH may be restarting; preserve the legacy queue as a
+                # read-only fallback rather than blanking Curate entirely.
+                pass
+
     d = _candidates_dir(vault)
     if d is None or not d.exists():
         return []
@@ -395,7 +457,29 @@ def _quarantine_delta(vault: Optional[str] = None) -> timedelta:
 
 
 def approve(cid: str, vault: Optional[str] = None, filename: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Approve a candidate -> status approved, quarantine_until = now + delta."""
+    """Approve and apply a BDH session candidate, or use legacy quarantine."""
+    candidate, proxy = _load_session_synthesis_candidate(cid, vault)
+    if candidate is not None and proxy is not None:
+        if candidate.get("status") in {"created", "merged", "applied", "noop"}:
+            result = dict(candidate)
+            result["status"] = "applied"
+            return _normalize_session_synthesis_candidate(result)
+
+        correlation = {
+            "candidate_id": candidate.get("candidate_id", ""),
+            "synthesis_id": candidate.get("synthesis_id", ""),
+            "session_id": candidate.get("session_id", ""),
+            "vault_id": candidate.get("vault_id") or vault or "core",
+            "source": candidate.get("source") or "session_synthesis",
+        }
+        if candidate.get("status") != "approved":
+            proxy.approve_synthesis_candidate(**correlation)
+        applied = proxy.apply_synthesis_candidate(**correlation)
+        result = dict(candidate)
+        result.update(applied if isinstance(applied, dict) else {})
+        result["status"] = str(result.get("status") or "applied")
+        return _normalize_session_synthesis_candidate(result)
+
     p = _find_by_id(cid, vault, filename)
     if not p:
         return None
@@ -411,7 +495,25 @@ def approve(cid: str, vault: Optional[str] = None, filename: Optional[str] = Non
 
 
 def reject(cid: str, reason: str = "", vault: Optional[str] = None, filename: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Reject a candidate -> status rejected, rejection_reason = human feedback."""
+    """Reject a BDH session candidate into local Curate feedback, or legacy file."""
+    candidate, proxy = _load_session_synthesis_candidate(cid, vault)
+    if candidate is not None and proxy is not None:
+        rejection_store = getattr(proxy, "session_synthesis_rejections", None)
+        if rejection_store is None:
+            import session_synthesis_rejections as rejection_store
+        rejection_store.record_rejection(
+            candidate_id=str(candidate.get("candidate_id") or cid),
+            vault_id=str(candidate.get("vault_id") or vault or "core"),
+            synthesis_id=str(candidate.get("synthesis_id") or ""),
+            session_id=str(candidate.get("session_id") or ""),
+            title=str(candidate.get("title") or ""),
+            reason=reason,
+        )
+        result = dict(candidate)
+        result["status"] = "rejected"
+        result["rejection_reason"] = reason
+        return _normalize_session_synthesis_candidate(result)
+
     p = _find_by_id(cid, vault, filename)
     if not p:
         return None

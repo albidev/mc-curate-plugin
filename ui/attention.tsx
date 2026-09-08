@@ -41,7 +41,7 @@ export function CurateAttention({ onActiveChange }: MCPluginAttentionProps) {
       try {
         const vaultPayload = await getJSON<{ vaults: VaultInfo[] }>('/candidates/vaults', token);
         const counts = await Promise.all((vaultPayload.vaults || []).map(async (vault) => {
-          const payload = await getJSON<CandidatesPayload>(`/candidates?status=pending&vault=${encodeURIComponent(vault.id)}`, token);
+          const payload = await getJSON<CandidatesPayload>(`/candidates?status=pending_review&vault=${encodeURIComponent(vault.id)}`, token);
           return { id: vault.id, label: vault.label, count: payload.count || 0 };
         }));
         if (cancelled) return;

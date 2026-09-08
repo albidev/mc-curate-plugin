@@ -48,7 +48,7 @@ interface VaultInfo {
   writable: boolean;
 }
 
-type StatusFilter = 'all' | 'pending' | 'approved' | 'rejected' | 'promoted';
+type StatusFilter = 'all' | 'pending' | 'approved' | 'applied' | 'rejected' | 'promoted';
 type SortMode = 'newest' | 'oldest' | 'confidence';
 
 const API_BASE = '/api/local';
@@ -81,7 +81,7 @@ function statusLabel(status: string): string {
 
 function statusTone(status: string): string {
   if (status === 'pending' || status === 'pending_review') return 'border-amber-400/25 bg-amber-400/10 text-amber-300';
-  if (status === 'approved' || status === 'promoted') return 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300';
+  if (status === 'approved' || status === 'promoted' || status === 'applied' || status === 'created' || status === 'merged') return 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300';
   if (status === 'rejected') return 'border-rose-400/25 bg-rose-400/10 text-rose-300';
   return 'border-white/10 bg-white/[0.04] text-text-muted';
 }
@@ -280,8 +280,10 @@ export function CurateRoute() {
   const visibleCandidates = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return candidates
-      .filter((candidate) => statusFilter === 'all' || candidate.status === statusFilter || (statusFilter === 'pending' && candidate.status === 'pending_review'))
-      .filter((candidate) => !normalizedQuery || [candidate.title, candidate.body, candidate.tags, candidate.id].some((value) => value?.toLowerCase().includes(normalizedQuery)))
+      .filter((candidate: Candidate) => statusFilter === 'all' || candidate.status === statusFilter || (statusFilter === 'pending' && candidate.status === 'pending_review'))
+      .filter((candidate: Candidate) => !normalizedQuery
+        || [candidate.title, candidate.body, candidate.id].some((value) => typeof value === 'string' && value.toLowerCase().includes(normalizedQuery))
+        || parseList(candidate.tags).some((value) => value.toLowerCase().includes(normalizedQuery)))
       .sort((a, b) => {
         if (sortMode === 'confidence') return (confidenceValue(b) || 0) - (confidenceValue(a) || 0);
         const left = new Date(a.created || 0).getTime();
@@ -294,7 +296,7 @@ export function CurateRoute() {
     || candidates.find((candidate) => candidate.id === selectedId)
     || null;
   const pendingCount = candidates.filter((candidate) => candidate.status === 'pending' || candidate.status === 'pending_review').length;
-  const approvedCount = candidates.filter((candidate) => candidate.status === 'approved' || candidate.status === 'promoted').length;
+  const approvedCount = candidates.filter((candidate: Candidate) => ['approved', 'promoted', 'applied', 'created', 'merged'].includes(candidate.status)).length;
   const averageConfidence = candidates.length
     ? candidates.reduce((sum, candidate) => sum + (confidenceValue(candidate) || 0), 0) / candidates.length
     : 0;
@@ -322,7 +324,7 @@ export function CurateRoute() {
         <section className="grid grid-cols-2 gap-3 xl:grid-cols-4">
           {[
             { label: 'Pending review', value: pendingCount, icon: Inbox, tone: 'text-amber-300 bg-amber-400/10' },
-            { label: 'Approved / promoted', value: approvedCount, icon: CheckCircle2, tone: 'text-emerald-300 bg-emerald-400/10' },
+            { label: 'Approved / applied', value: approvedCount, icon: CheckCircle2, tone: 'text-emerald-300 bg-emerald-400/10' },
             { label: 'In this vault', value: candidates.length, icon: Archive, tone: 'text-sky-300 bg-sky-400/10' },
             { label: 'Average confidence', value: candidates.length ? `${Math.round(averageConfidence * 100)}%` : '—', icon: ShieldCheck, tone: 'text-violet-300 bg-violet-400/10' },
           ].map(({ label, value, icon: Icon, tone }) => (
@@ -346,7 +348,7 @@ export function CurateRoute() {
 
         <section className="flex flex-col gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-3 sm:flex-row sm:items-center sm:p-4">
           <label className="relative min-w-0 flex-1"><Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-subtle" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, content, tags, or ID…" className="h-10 w-full rounded-xl border border-white/[0.08] bg-black/10 pl-9 pr-3 text-sm text-text outline-none placeholder:text-text-subtle focus:border-sky-400/40" /></label>
-          <div className="flex gap-2"><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as StatusFilter)} className="h-10 min-w-32 rounded-xl border border-white/[0.08] bg-surface px-3 text-sm text-text outline-none"><option value="all">All status</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="promoted">Promoted</option></select><select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)} className="h-10 min-w-32 rounded-xl border border-white/[0.08] bg-surface px-3 text-sm text-text outline-none"><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="confidence">Confidence</option></select></div>
+          <div className="flex gap-2"><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as StatusFilter)} className="h-10 min-w-32 rounded-xl border border-white/[0.08] bg-surface px-3 text-sm text-text outline-none"><option value="all">All status</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="applied">Applied</option><option value="rejected">Rejected</option><option value="promoted">Promoted</option></select><select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)} className="h-10 min-w-32 rounded-xl border border-white/[0.08] bg-surface px-3 text-sm text-text outline-none"><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="confidence">Confidence</option></select></div>
         </section>
 
         {loading ? (
