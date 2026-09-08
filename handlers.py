@@ -84,10 +84,26 @@ def _normalize_session_synthesis_candidate(raw: Dict[str, Any]) -> Dict[str, Any
 
 def _load_session_synthesis_candidate(candidate_id: str, vault: Optional[str]):
     proxy = _session_synthesis_proxy()
-    if proxy is None or (vault not in (None, "core")):
+    if proxy is None:
         return None, None
     candidate = proxy.get_synthesis_candidate(candidate_id, vault_id=vault or "core")
     return candidate, proxy
+
+
+def _load_bdh_candidates(vault: Optional[str], status: Optional[str]) -> Optional[List[Dict[str, Any]]]:
+    proxy = _session_synthesis_proxy()
+    if proxy is None:
+        return None
+    try:
+        snapshot = proxy.load_synthesis_candidates(vault_id=vault or "core", status=status)
+        raw_candidates = snapshot.get("candidates", []) if isinstance(snapshot, dict) else []
+        return [
+            _normalize_session_synthesis_candidate(candidate)
+            for candidate in raw_candidates
+            if isinstance(candidate, dict)
+        ]
+    except Exception:
+        return None
 
 
 def _vaults_file() -> Path:
@@ -428,34 +444,23 @@ def _write_candidate(path: Path, meta: Dict[str, Any], body: str) -> None:
 
 
 def list_candidates(status: Optional[str] = None, vault: Optional[str] = None) -> List[Dict[str, Any]]:
-    # Core session_synthesis candidates are owned by BDH, not the legacy
-    # vault-brain markdown queue. Keep non-core/nightly candidates on the old
-    # path until their producers migrate too.
-    if vault in (None, "core"):
-        proxy = _session_synthesis_proxy()
-        if proxy is not None:
-            try:
-                snapshot = proxy.load_synthesis_candidates(vault_id="core", status=status)
-                raw_candidates = snapshot.get("candidates", []) if isinstance(snapshot, dict) else []
-                return [
-                    _normalize_session_synthesis_candidate(candidate)
-                    for candidate in raw_candidates
-                    if isinstance(candidate, dict)
-                ]
-            except Exception:
-                # BDH may be restarting; preserve the legacy queue as a
-                # read-only fallback rather than blanking Curate entirely.
-                pass
+    # BDH owns session_synthesis candidates. Core uses the new store as its
+    # complete source; non-core vaults merge it with their legacy nightly-brain
+    # queue during the migration window.
+    bdh_candidates = _load_bdh_candidates(vault, status)
+    if vault in (None, "core") and bdh_candidates is not None:
+        return bdh_candidates
 
     d = _candidates_dir(vault)
-    if d is None or not d.exists():
-        return []
-    out = []
-    for p in sorted(d.glob("*.md")):
-        c = _read_candidate(p)
-        if c and (status is None or c.get("status") == status):
-            out.append(c)
-    return out
+    legacy: List[Dict[str, Any]] = []
+    if d is not None and d.exists():
+        for p in sorted(d.glob("*.md")):
+            c = _read_candidate(p)
+            if c and (status is None or c.get("status") == status):
+                legacy.append(c)
+    if vault not in (None, "core") and bdh_candidates is not None:
+        return legacy + bdh_candidates
+    return legacy
 
 
 def _find_by_id(cid: str, vault: Optional[str] = None, filename: Optional[str] = None) -> Optional[Path]:
