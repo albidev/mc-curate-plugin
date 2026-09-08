@@ -81,6 +81,48 @@ def test_core_curate_approval_applies_bdh_candidate(monkeypatch):
     assert calls[1][1]["session_id"] == "session-123"
 
 
+def test_legacy_candidate_extracts_description_from_body_yaml(tmp_path):
+    path = tmp_path / "legacy.md"
+    path.write_text(
+        "---\n"
+        "id: legacy-1\n"
+        "title: Legacy concept\n"
+        "description: \"|\"\n"
+        "---\n"
+        "title: Legacy concept\n"
+        "description: |\n"
+        "  The semantic description lives in the body YAML.\n"
+        "\n"
+        "## Sources\n"
+        "- [[wiki/example]]\n",
+        encoding="utf-8",
+    )
+
+    candidate = handlers._read_candidate(path)
+
+    assert candidate["description"] == "The semantic description lives in the body YAML."
+    assert candidate["body"] == "The semantic description lives in the body YAML."
+
+
+def test_legacy_candidate_uses_markdown_body_when_description_is_missing(tmp_path):
+    path = tmp_path / "repo-update.md"
+    path.write_text(
+        "---\n"
+        "id: repo-update-1\n"
+        "title: Repository update\n"
+        "description: null\n"
+        "---\n"
+        "**Repository:** example/repo\n\n"
+        "**Commits:**\n- `abc123` fix: close the hole\n",
+        encoding="utf-8",
+    )
+
+    candidate = handlers._read_candidate(path)
+
+    assert candidate["description"] == candidate["body"]
+    assert "Repository" in candidate["description"]
+
+
 def test_core_curate_rejection_is_kept_in_local_feedback_log(monkeypatch):
     recorded = {}
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import textwrap
 import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -251,6 +252,31 @@ def _body_metadata(body: str) -> Dict[str, Any]:
     return {}
 
 
+def _body_description(body: str, structured: Dict[str, Any]) -> str:
+    """Recover semantic text from legacy YAML bodies or raw markdown."""
+    value = structured.get("description")
+    if value:
+        return str(value).strip()
+
+    lines = body.splitlines()
+    for index, line in enumerate(lines):
+        if re.match(r"^\s*description:\s*[|>]\s*$", line):
+            block_lines: list[str] = []
+            for candidate_line in lines[index + 1:]:
+                if candidate_line.strip() and not candidate_line.startswith((" ", "\t")):
+                    break
+                block_lines.append(candidate_line)
+            value = textwrap.dedent("\n".join(block_lines)).strip()
+            if value:
+                return value
+
+    inline = re.search(r"(?m)^description:\s*[\"']?(.+?)[\"']?\s*$", body)
+    if inline:
+        return inline.group(1).strip()
+
+    return body.strip()
+
+
 _SOURCE_PATH_CACHE: Dict[str, Optional[Path]] = {}
 _SOURCE_INDEX: Optional[Dict[str, Path]] = None
 _SOURCE_INDEX_ROOT: Optional[Path] = None
@@ -370,9 +396,15 @@ def _read_candidate(path: Path) -> Optional[Dict[str, Any]]:
     parts = text.split("---", 2)
     body = _clean_body(parts[2]) if len(parts) > 2 else ""
     structured = _body_metadata(body)
+    body_description = _body_description(body, structured)
     for key in ("type", "tags", "confidence", "sources", "description"):
         if key not in meta and key in structured:
             meta[key] = structured[key]
+    if body_description and not str(meta.get("description") or "").strip():
+        meta["description"] = body_description
+    if body_description and str(meta.get("description") or "").strip() in {"|", ">"}:
+        meta["description"] = body_description
+        body = body_description
     meta["sourceNotes"] = _source_notes(meta.get("sources") or structured.get("sources"))
     meta["_path"] = str(path)
     meta["_filename"] = path.name
