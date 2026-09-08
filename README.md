@@ -13,7 +13,12 @@ The plugin owns the complete feature:
 
 Mission Control provides only the host runtime. It does not contain Curate-specific API helpers, routes, or business logic.
 
-Repository: `albidev/mc-curate-plugin` (private)
+Curate integrates two public projects:
+
+- [Hermes Mission Control](https://github.com/albidev/hermes-mission-control) — the host dashboard and plugin runtime;
+- [BDH Graph Harness](https://github.com/albidev/bdh-graph-harness) — the graph-backed knowledge and nightly-brain pipeline that produces review candidates.
+
+Curate is installed as an external plugin by cloning this repository into the Hermes plugin directory. The plugin repository itself is intentionally distributed separately from the host and the BDH runtime.
 
 ## Install
 
