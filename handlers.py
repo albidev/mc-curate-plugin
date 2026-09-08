@@ -58,10 +58,15 @@ def _session_synthesis_proxy():
 
 def _normalize_session_synthesis_candidate(raw: Dict[str, Any]) -> Dict[str, Any]:
     """Adapt BDH's candidate contract to the Curate card contract."""
-    provenance = raw.get("provenance") if isinstance(raw.get("provenance"), dict) else {}
+    provenance_raw = raw.get("provenance")
+    provenance: Dict[str, Any] = provenance_raw if isinstance(provenance_raw, dict) else {}
     source_notes = provenance.get("source_notes")
     if not isinstance(source_notes, list):
         source_notes = []
+    source_node_ids = provenance.get("source_node_ids")
+    if not isinstance(source_node_ids, list):
+        source_node_ids = []
+    source_node_ids = [str(node_id) for node_id in source_node_ids if node_id]
     return _json_safe({
         "id": str(raw.get("candidate_id") or ""),
         "candidate_id": str(raw.get("candidate_id") or ""),
@@ -77,6 +82,7 @@ def _normalize_session_synthesis_candidate(raw: Dict[str, Any]) -> Dict[str, Any
         "created": raw.get("created_at"),
         "created_at": raw.get("created_at"),
         "sources": source_notes,
+        "sourceNodeIds": source_node_ids,
         "provenance": provenance,
         "extra": raw.get("extra") if isinstance(raw.get("extra"), dict) else {},
     })

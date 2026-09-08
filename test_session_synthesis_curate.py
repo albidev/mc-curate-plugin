@@ -15,7 +15,10 @@ CANDIDATE = {
     "confidence": "low",
     "status": "pending_review",
     "created_at": "2026-09-08T13:58:22+00:00",
-    "provenance": {"source_notes": ["session-synthesis", "architecture"]},
+    "provenance": {
+        "source_notes": ["session-synthesis", "architecture"],
+        "source_node_ids": ["vault:wiki/a.md", "vault:wiki/b.md"],
+    },
     "extra": {"slug": "read-write-path-independence"},
 }
 
@@ -48,6 +51,7 @@ def test_core_curate_lists_bdh_session_synthesis_candidates(monkeypatch):
     assert candidate["title"] == "Read Write Path Independence"
     assert candidate["body"] == CANDIDATE["definition"]
     assert candidate["created"] == CANDIDATE["created_at"]
+    assert candidate["sourceNodeIds"] == ["vault:wiki/a.md", "vault:wiki/b.md"]
 
 
 def test_core_vault_summary_counts_pending_review(monkeypatch):
