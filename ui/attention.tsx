@@ -7,10 +7,7 @@ interface MCPluginAttentionProps {
 interface VaultInfo {
   id: string;
   label: string;
-}
-
-interface CandidatesPayload {
-  count?: number;
+  pending_count?: number;
 }
 
 const API_BASE = '/api/local';
@@ -40,9 +37,10 @@ export function CurateAttention({ onActiveChange }: MCPluginAttentionProps) {
     const refresh = async () => {
       try {
         const vaultPayload = await getJSON<{ vaults: VaultInfo[] }>('/candidates/vaults', token);
-        const counts = await Promise.all((vaultPayload.vaults || []).map(async (vault) => {
-          const payload = await getJSON<CandidatesPayload>(`/candidates?status=pending_review&vault=${encodeURIComponent(vault.id)}`, token);
-          return { id: vault.id, label: vault.label, count: payload.count || 0 };
+        const counts = (vaultPayload.vaults || []).map((vault) => ({
+          id: vault.id,
+          label: vault.label,
+          count: vault.pending_count || 0,
         }));
         if (cancelled) return;
         const active = counts.filter((item) => item.count > 0);
