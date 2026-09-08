@@ -318,7 +318,7 @@ launchctl kickstart -k gui/$(id -u)/ai.hermes.mission-control-telemetry
 Check:
 
 - the candidate's `sources` field;
-- the source note exists under `$HERMES_VAULT` or the configured vault root;
+- the source note exists under the configured Hermes vault root (for example `$HERMES_VAULT`);
 - the source uses either a vault-relative path or a resolvable basename;
 - the telemetry process was restarted after updating `handlers.py`.
 
