@@ -20,7 +20,7 @@ import os
 import re
 import shutil
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -272,6 +272,17 @@ def _source_notes(sources: Any) -> List[Dict[str, Any]]:
     return notes
 
 
+def _json_safe(value: Any) -> Any:
+    """Convert YAML-native scalar objects into JSON-safe values."""
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
 def _read_candidate(path: Path) -> Optional[Dict[str, Any]]:
     try:
         text = path.read_text(encoding="utf-8")
@@ -290,7 +301,7 @@ def _read_candidate(path: Path) -> Optional[Dict[str, Any]]:
     meta["_path"] = str(path)
     meta["_filename"] = path.name
     meta["body"] = body
-    return meta
+    return _json_safe(meta)
 
 
 def _write_candidate(path: Path, meta: Dict[str, Any], body: str) -> None:
