@@ -130,7 +130,7 @@ A candidate normally contains:
       "source": "code-managed-cursor.md",
       "found": true,
       "title": "Code-managed cursor",
-      "path": "/Users/albi/Documents/Hermes/wiki/concepts/code-managed-cursor.md",
+      "path": "$HERMES_VAULT/wiki/concepts/code-managed-cursor.md",
       "body": "..."
     }
   ]
@@ -318,7 +318,7 @@ launchctl kickstart -k gui/$(id -u)/ai.hermes.mission-control-telemetry
 Check:
 
 - the candidate's `sources` field;
-- the source note exists under `/Users/albi/Documents/Hermes` or the configured vault root;
+- the source note exists under the configured Hermes vault root (for example `$HERMES_VAULT`);
 - the source uses either a vault-relative path or a resolvable basename;
 - the telemetry process was restarted after updating `handlers.py`.
 
