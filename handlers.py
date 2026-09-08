@@ -208,6 +208,29 @@ def _body_metadata(body: str) -> Dict[str, Any]:
     return {}
 
 
+_SOURCE_PATH_CACHE: Dict[str, Optional[Path]] = {}
+_SOURCE_INDEX: Optional[Dict[str, Path]] = None
+_SOURCE_INDEX_ROOT: Optional[Path] = None
+_SOURCE_NOTE_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
+def _source_index(vault: Path) -> Dict[str, Path]:
+    """Build one basename index per vault instead of rescanning for every source."""
+    global _SOURCE_INDEX, _SOURCE_INDEX_ROOT
+    if _SOURCE_INDEX is not None and _SOURCE_INDEX_ROOT == vault:
+        return _SOURCE_INDEX
+    index: Dict[str, Path] = {}
+    try:
+        for candidate in vault.rglob("*.md"):
+            if candidate.is_file():
+                index.setdefault(candidate.name, candidate.resolve())
+    except OSError:
+        pass
+    _SOURCE_INDEX_ROOT = vault
+    _SOURCE_INDEX = index
+    return index
+
+
 def _source_path(source: Any) -> Optional[Path]:
     """Resolve a source reference inside the configured vault only."""
     value = str(source or "").strip().strip('"').strip("'")
@@ -215,6 +238,8 @@ def _source_path(source: Any) -> Optional[Path]:
         return None
     if value.startswith("vault:"):
         value = value[6:]
+    if value in _SOURCE_PATH_CACHE:
+        return _SOURCE_PATH_CACHE[value]
     vault = hermes_vault_dir().resolve()
     raw = Path(os.path.expanduser(value))
     candidates = []
@@ -226,19 +251,31 @@ def _source_path(source: Any) -> Optional[Path]:
         try:
             resolved = candidate.resolve()
             if resolved.is_file() and (resolved == vault or vault in resolved.parents):
+                _SOURCE_PATH_CACHE[value] = resolved
                 return resolved
         except OSError:
             continue
-    # Source lists often contain only a filename. Search by basename, still
-    # constrained to the vault root and capped to avoid a broad filesystem scan.
-    name = Path(value).name
+    resolved = _source_index(vault).get(Path(value).name)
+    _SOURCE_PATH_CACHE[value] = resolved
+    return resolved
+
+
+def _read_source_note(path: Path) -> Dict[str, Any]:
+    key = str(path)
+    cached = _SOURCE_NOTE_CACHE.get(key)
+    if cached is not None:
+        return cached
     try:
-        for candidate in vault.rglob(name):
-            if candidate.is_file():
-                return candidate.resolve()
+        text = path.read_text(encoding="utf-8")
     except OSError:
-        pass
-    return None
+        return {"title": path.stem.replace("-", " ").title(), "body": ""}
+    parsed = _parse_frontmatter(text)
+    parts = text.split("---", 2)
+    body = parts[2].strip() if len(parts) > 2 else text.strip()
+    body = re.sub(r"^```\s*|```\s*$", "", body).strip()
+    note = {"title": str(parsed.get("title") or path.stem.replace("-", " ").title()), "body": body[:12000]}
+    _SOURCE_NOTE_CACHE[key] = note
+    return note
 
 
 def _source_notes(sources: Any) -> List[Dict[str, Any]]:
@@ -257,17 +294,13 @@ def _source_notes(sources: Any) -> List[Dict[str, Any]]:
             text = path.read_text(encoding="utf-8")
         except OSError:
             continue
-        parsed = _parse_frontmatter(text)
-        parts = text.split("---", 2)
-        body = parts[2].strip() if len(parts) > 2 else text.strip()
-        body = re.sub(r"^```\s*|```\s*$", "", body).strip()
-        title = str(parsed.get("title") or path.stem.replace("-", " ").title())
+        note = _read_source_note(path)
         notes.append({
             "source": str(source),
             "found": True,
-            "title": title,
+            "title": note["title"],
             "path": str(path),
-            "body": body[:12000],
+            "body": note["body"],
         })
     return notes
 
