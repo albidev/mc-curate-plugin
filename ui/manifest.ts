@@ -8,6 +8,7 @@ export const curateManifest: MCPluginManifest = {
   navItem: { to: '/curate', label: 'nav.curate', icon: 'ClipboardCheck', order: 60 },
   routePath: '/curate',
   lazyRoute: true,
+  surfaces: { attention: { enabled: true, order: 60 } },
   permissions: [],
   endpoints: [
     { method: 'GET', path: '/candidates', handler: 'listCandidates' },
