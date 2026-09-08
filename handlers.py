@@ -144,6 +144,18 @@ def _load_routing_vaults() -> Dict[str, Dict[str, Any]]:
         return {}
 
 
+def _candidate_vault_root(vault: Optional[str]) -> Path:
+    """Resolve the source-note root for a Curate vault."""
+    if vault and vault != "core":
+        candidate_config = _load_vaults().get(vault) or {}
+        if candidate_config.get("vault_dir"):
+            return Path(os.path.expanduser(str(candidate_config["vault_dir"]))).resolve()
+        routing_config = _load_routing_vaults().get(vault) or {}
+        if routing_config.get("root"):
+            return Path(os.path.expanduser(str(routing_config["root"]))).resolve()
+    return hermes_vault_dir().resolve()
+
+
 def _candidates_dir(vault: Optional[str] = None) -> Optional[Path]:
     """Resolve a candidate directory without falling back to Core for known
     non-candidate vaults."""
@@ -293,7 +305,7 @@ def _body_description(body: str, structured: Dict[str, Any]) -> str:
     return body.strip()
 
 
-_SOURCE_PATH_CACHE: Dict[str, Optional[Path]] = {}
+_SOURCE_PATH_CACHE: Dict[tuple[str, str], Optional[Path]] = {}
 _SOURCE_INDEX: Optional[Dict[str, Path]] = None
 _SOURCE_INDEX_ROOT: Optional[Path] = None
 _SOURCE_NOTE_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -316,16 +328,17 @@ def _source_index(vault: Path) -> Dict[str, Path]:
     return index
 
 
-def _source_path(source: Any) -> Optional[Path]:
-    """Resolve a source reference inside the configured vault only."""
+def _source_path(source: Any, vault_root: Optional[Path] = None) -> Optional[Path]:
+    """Resolve a source reference within the selected vault by path or title."""
     value = str(source or "").strip().strip('"').strip("'")
     if not value:
         return None
     if value.startswith("vault:"):
         value = value[6:]
-    if value in _SOURCE_PATH_CACHE:
-        return _SOURCE_PATH_CACHE[value]
-    vault = hermes_vault_dir().resolve()
+    vault = (vault_root or hermes_vault_dir()).resolve()
+    cache_key = (str(vault), value)
+    if cache_key in _SOURCE_PATH_CACHE:
+        return _SOURCE_PATH_CACHE[cache_key]
     raw = Path(os.path.expanduser(value))
     candidates = []
     if raw.is_absolute():
@@ -336,13 +349,58 @@ def _source_path(source: Any) -> Optional[Path]:
         try:
             resolved = candidate.resolve()
             if resolved.is_file() and (resolved == vault or vault in resolved.parents):
-                _SOURCE_PATH_CACHE[value] = resolved
+                _SOURCE_PATH_CACHE[cache_key] = resolved
                 return resolved
         except OSError:
             continue
-    resolved = _source_index(vault).get(Path(value).name)
-    _SOURCE_PATH_CACHE[value] = resolved
-    return resolved
+
+    index = _source_index(vault)
+    resolved = index.get(Path(value).name)
+    if resolved is not None:
+        _SOURCE_PATH_CACHE[cache_key] = resolved
+        return resolved
+
+    # Legacy generators sometimes emitted a human title instead of a path.
+    # Match only inside the selected vault and only against frontmatter titles.
+    needle = " ".join(value.casefold().split())
+    for candidate in index.values():
+        try:
+            parsed = _parse_frontmatter(candidate.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        title = " ".join(str(parsed.get("title") or "").casefold().split())
+        if title and (needle == title or needle in title or title in needle):
+            _SOURCE_PATH_CACHE[cache_key] = candidate
+            return candidate
+
+    needle = " ".join(value.casefold().split())
+    for candidate in index.values():
+        try:
+            text = candidate.read_text(encoding="utf-8").casefold()
+        except OSError:
+            continue
+        tokens = [token for token in re.findall(r"[a-z0-9]+", needle) if len(token) >= 3]
+        if len(tokens) >= 2 and all(token in text for token in tokens):
+            _SOURCE_PATH_CACHE[cache_key] = candidate
+            return candidate
+
+    _SOURCE_PATH_CACHE[cache_key] = None
+    return None
+
+
+def _source_match_type(source: Any, path: Path) -> str:
+    value = str(source or "").strip().strip('"').strip("'")
+    if value.startswith("vault:"):
+        value = value[6:]
+    if Path(value).name.casefold() == path.name.casefold():
+        return "found"
+    try:
+        parsed = _parse_frontmatter(path.read_text(encoding="utf-8"))
+    except OSError:
+        return "related"
+    needle = " ".join(value.casefold().split())
+    title = " ".join(str(parsed.get("title") or "").casefold().split())
+    return "found" if title and (needle == title or needle in title or title in needle) else "related"
 
 
 def _read_source_note(path: Path) -> Dict[str, Any]:
@@ -363,17 +421,17 @@ def _read_source_note(path: Path) -> Dict[str, Any]:
     return note
 
 
-def _source_notes(sources: Any) -> List[Dict[str, Any]]:
-    """Load bounded context from source notes referenced by a candidate."""
+def _source_notes(sources: Any, vault_root: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """Load bounded context from source notes inside the selected vault."""
     if isinstance(sources, str):
         sources = [item.strip() for item in sources.strip("[]").split(",") if item.strip()]
     if not isinstance(sources, (list, tuple)):
         return []
     notes: List[Dict[str, Any]] = []
     for source in sources:
-        path = _source_path(source)
+        path = _source_path(source, vault_root=vault_root)
         if path is None:
-            notes.append({"source": str(source), "found": False, "title": str(source), "body": ""})
+            notes.append({"source": str(source), "found": False, "match_type": "missing", "title": str(source), "body": ""})
             continue
         try:
             text = path.read_text(encoding="utf-8")
@@ -383,6 +441,7 @@ def _source_notes(sources: Any) -> List[Dict[str, Any]]:
         notes.append({
             "source": str(source),
             "found": True,
+            "match_type": _source_match_type(source, path),
             "title": note["title"],
             "path": str(path),
             "body": note["body"],
@@ -401,7 +460,7 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
-def _read_candidate(path: Path) -> Optional[Dict[str, Any]]:
+def _read_candidate(path: Path, vault_root: Optional[Path] = None) -> Optional[Dict[str, Any]]:
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
@@ -421,7 +480,7 @@ def _read_candidate(path: Path) -> Optional[Dict[str, Any]]:
     if body_description and str(meta.get("description") or "").strip() in {"|", ">"}:
         meta["description"] = body_description
         body = body_description
-    meta["sourceNotes"] = _source_notes(meta.get("sources") or structured.get("sources"))
+    meta["sourceNotes"] = _source_notes(meta.get("sources") or structured.get("sources"), vault_root=vault_root)
     meta["_path"] = str(path)
     meta["_filename"] = path.name
     meta["body"] = body
@@ -455,7 +514,7 @@ def list_candidates(status: Optional[str] = None, vault: Optional[str] = None) -
     legacy: List[Dict[str, Any]] = []
     if d is not None and d.exists():
         for p in sorted(d.glob("*.md")):
-            c = _read_candidate(p)
+            c = _read_candidate(p, vault_root=_candidate_vault_root(vault))
             if c and (status is None or c.get("status") == status):
                 legacy.append(c)
     if vault not in (None, "core") and bdh_candidates is not None:
@@ -628,7 +687,7 @@ def promote_ready() -> List[Dict[str, Any]]:
         if not d.exists():
             continue
         for p in d.glob("*.md"):
-            c = _read_candidate(p)
+            c = _read_candidate(p, vault_root=vault)
             if not c or c.get("status") != "approved":
                 continue
             q = c.get("quarantine_until")

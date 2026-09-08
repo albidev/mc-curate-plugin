@@ -123,6 +123,31 @@ def test_legacy_candidate_uses_markdown_body_when_description_is_missing(tmp_pat
     assert "Repository" in candidate["description"]
 
 
+def test_source_notes_resolve_title_inside_selected_vault(tmp_path):
+    note = tmp_path / "projects" / "crossnection" / "pentair-mqtt-bridge-spec.md"
+    note.parent.mkdir(parents=True)
+    note.write_text(
+        "---\n"
+        "title: Pentair — Bottone Fisico di Conteggio (specifica architetturale)\n"
+        "---\n\n"
+        "# Pentair — Bottone Fisico di Conteggio\n\nDettagli.\n"
+        "Advantech ADAM 6050 hardware reference.\n",
+        encoding="utf-8",
+    )
+
+    notes = handlers._source_notes(
+        ["Pentair — Bottone Fisico di Conteggio", "Advantech ADAM 6050"],
+        vault_root=tmp_path,
+    )
+
+    assert notes[0]["found"] is True
+    assert notes[0]["match_type"] == "found"
+    assert notes[0]["path"] == str(note)
+    assert notes[1]["found"] is True
+    assert notes[1]["match_type"] == "related"
+    assert notes[1]["path"] == str(note)
+
+
 def test_core_curate_rejection_is_kept_in_local_feedback_log(monkeypatch):
     recorded = {}
 
