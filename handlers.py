@@ -157,29 +157,119 @@ def can_curate(vault: Optional[str] = None) -> bool:
 
 
 def _parse_frontmatter(text: str) -> Dict[str, Any]:
-    """Parse YAML-ish frontmatter (simple key: value lines)."""
-    meta: Dict[str, Any] = {}
+    """Parse YAML frontmatter, with a conservative fallback for legacy files."""
     if not text.startswith("---"):
-        return meta
-    lines = text.splitlines()
-    for line in lines[1:]:
-        if line.strip() == "---":
-            break
+        return {}
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        return {}
+    raw = parts[1]
+    try:
+        import yaml
+        parsed = yaml.safe_load(raw) or {}
+        if isinstance(parsed, dict):
+            return {str(k): v for k, v in parsed.items()}
+    except Exception:
+        pass
+
+    # Some older candidates contain invalid quoted multiline values. Keep them
+    # readable instead of dropping the whole candidate.
+    meta: Dict[str, Any] = {}
+    for line in raw.splitlines():
         if ":" in line:
-            k, v = line.split(":", 1)
-            meta[k.strip()] = v.strip().strip('"').strip("'")
+            key, value = line.split(":", 1)
+            meta[key.strip()] = value.strip().strip('"').strip("'")
     return meta
 
 
 def _clean_body(body: str) -> str:
     """Strip leftover YAML/markdown separators and per-concept headers from a
-    candidate body so the UI shows only readable content."""
+    candidate body so the UI shows readable content."""
     body = body.strip()
     body = re.sub(r"^```\s*|```\s*$", "", body)
     lines = [ln for ln in body.splitlines() if not re.match(r"^\s*#\s+\d+\.", ln)]
     body = "\n".join(lines)
     body = re.split(r"\n---(\n|$)", body)[0]
     return body.strip()
+
+
+def _body_metadata(body: str) -> Dict[str, Any]:
+    """Recover structured fields when the generator emitted YAML in the body."""
+    candidate = body.strip().strip("`").strip()
+    try:
+        import yaml
+        parsed = yaml.safe_load(candidate)
+        if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
+            return {str(k): v for k, v in parsed[0].items()}
+        if isinstance(parsed, dict):
+            return {str(k): v for k, v in parsed.items()}
+    except Exception:
+        pass
+    return {}
+
+
+def _source_path(source: Any) -> Optional[Path]:
+    """Resolve a source reference inside the configured vault only."""
+    value = str(source or "").strip().strip('"').strip("'")
+    if not value:
+        return None
+    if value.startswith("vault:"):
+        value = value[6:]
+    vault = hermes_vault_dir().resolve()
+    raw = Path(os.path.expanduser(value))
+    candidates = []
+    if raw.is_absolute():
+        candidates.append(raw)
+    else:
+        candidates.extend((vault / value, vault / "wiki" / "concepts" / Path(value).name))
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+            if resolved.is_file() and (resolved == vault or vault in resolved.parents):
+                return resolved
+        except OSError:
+            continue
+    # Source lists often contain only a filename. Search by basename, still
+    # constrained to the vault root and capped to avoid a broad filesystem scan.
+    name = Path(value).name
+    try:
+        for candidate in vault.rglob(name):
+            if candidate.is_file():
+                return candidate.resolve()
+    except OSError:
+        pass
+    return None
+
+
+def _source_notes(sources: Any) -> List[Dict[str, Any]]:
+    """Load bounded context from source notes referenced by a candidate."""
+    if isinstance(sources, str):
+        sources = [item.strip() for item in sources.strip("[]").split(",") if item.strip()]
+    if not isinstance(sources, (list, tuple)):
+        return []
+    notes: List[Dict[str, Any]] = []
+    for source in sources:
+        path = _source_path(source)
+        if path is None:
+            notes.append({"source": str(source), "found": False, "title": str(source), "body": ""})
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        parsed = _parse_frontmatter(text)
+        parts = text.split("---", 2)
+        body = parts[2].strip() if len(parts) > 2 else text.strip()
+        body = re.sub(r"^```\s*|```\s*$", "", body).strip()
+        title = str(parsed.get("title") or path.stem.replace("-", " ").title())
+        notes.append({
+            "source": str(source),
+            "found": True,
+            "title": title,
+            "path": str(path),
+            "body": body[:12000],
+        })
+    return notes
 
 
 def _read_candidate(path: Path) -> Optional[Dict[str, Any]]:
@@ -190,10 +280,16 @@ def _read_candidate(path: Path) -> Optional[Dict[str, Any]]:
     meta = _parse_frontmatter(text)
     if not meta:
         return None
+    parts = text.split("---", 2)
+    body = _clean_body(parts[2]) if len(parts) > 2 else ""
+    structured = _body_metadata(body)
+    for key in ("type", "tags", "confidence", "sources", "description"):
+        if key not in meta and key in structured:
+            meta[key] = structured[key]
+    meta["sourceNotes"] = _source_notes(meta.get("sources") or structured.get("sources"))
     meta["_path"] = str(path)
     meta["_filename"] = path.name
-    parts = text.split("---", 2)
-    meta["body"] = _clean_body(parts[2]) if len(parts) > 2 else ""
+    meta["body"] = body
     return meta
 
 
