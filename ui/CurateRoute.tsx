@@ -357,7 +357,7 @@ export function CurateRoute() {
         ) : (
           <section className="flex min-w-0 flex-col gap-3">
             <div className="flex items-center justify-between"><div><p className="text-sm font-semibold text-text">Candidate queue</p><p className="text-xs text-text-muted">{visibleCandidates.length} of {candidates.length} candidates visible</p></div><span className="rounded-full bg-white/[0.06] px-2.5 py-1 text-xs text-text-muted">{statusFilter === 'all' ? 'All candidates' : statusLabel(statusFilter)}</span></div>
-            {visibleCandidates.length ? visibleCandidates.map((candidate) => <CandidateCard key={candidate.id} candidate={candidate} selected={candidate.id === selectedId} onSelect={() => setSelectedId(candidate.id)} />) : <div className="rounded-2xl border border-dashed border-white/10 px-5 py-12 text-center"><ClipboardCheck size={28} className="mx-auto text-text-subtle" /><p className="mt-3 text-sm font-medium text-text">No candidates match</p><p className="mt-1 text-xs text-text-muted">Try another status, vault, or search term.</p></div>}
+            {visibleCandidates.length ? visibleCandidates.map((candidate) => <CandidateCard key={`${candidate.id}:${candidate._filename ?? ''}`} candidate={candidate} selected={candidate.id === selectedId} onSelect={() => setSelectedId(candidate.id)} />) : <div className="rounded-2xl border border-dashed border-white/10 px-5 py-12 text-center"><ClipboardCheck size={28} className="mx-auto text-text-subtle" /><p className="mt-3 text-sm font-medium text-text">No candidates match</p><p className="mt-1 text-xs text-text-muted">Try another status, vault, or search term.</p></div>}
           </section>
         )}
       </div>
