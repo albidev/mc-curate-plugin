@@ -194,10 +194,9 @@ function CandidateCard({
   const isProcessing = actionId === candidate.id;
 
   return (
-    <button
-      type="button"
+    <div
       onClick={onSelect}
-      className={`group w-full rounded-2xl border p-4 text-left transition-all ${
+      className={`group w-full rounded-2xl border p-4 text-left transition-all cursor-pointer ${
         selected
           ? 'border-sky-400/40 bg-sky-400/[0.08] shadow-[0_0_0_1px_rgba(56,189,248,0.08)]'
           : 'border-white/[0.08] bg-white/[0.025] hover:border-white/15 hover:bg-white/[0.05]'
@@ -226,7 +225,7 @@ function CandidateCard({
           <div className="flex items-center gap-1.5 ml-auto shrink-0">
             <InlineActionButton
               variant="primary"
-              onClick={() => onApprove(candidate)}
+              onClick={(e) => { e.stopPropagation(); onApprove(candidate); }}
               disabled={isProcessing}
               title="Approve candidate"
             >
@@ -234,7 +233,7 @@ function CandidateCard({
             </InlineActionButton>
             <InlineActionButton
               variant="danger"
-              onClick={() => onReject(candidate)}
+              onClick={(e) => { e.stopPropagation(); onReject(candidate); }}
               disabled={isProcessing}
               title="Reject candidate"
             >
@@ -244,7 +243,7 @@ function CandidateCard({
         )}
         {!isPending && <ChevronRight size={17} className={`mt-1 shrink-0 transition-transform ${selected ? 'translate-x-0.5 text-sky-300' : 'text-text-subtle group-hover:translate-x-0.5 group-hover:text-text-muted'}`} />}
       </div>
-    </button>
+    </div>
   );
 }
 
