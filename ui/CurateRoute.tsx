@@ -17,6 +17,38 @@ import {
   XCircle,
 } from 'lucide-react';
 
+function InlineActionButton({
+  variant,
+  onClick,
+  disabled,
+  children,
+  title,
+}: {
+  variant: 'primary' | 'danger' | 'ghost';
+  onClick: () => void;
+  disabled?: boolean;
+  children: React.ReactNode;
+  title: string;
+}) {
+  const styles = {
+    primary: 'border-emerald-400/30 bg-emerald-400/15 text-emerald-200 hover:bg-emerald-400/25',
+    danger: 'border-rose-400/30 bg-rose-400/10 text-rose-200 hover:bg-rose-400/20',
+    ghost: 'border-transparent bg-transparent text-text-muted hover:bg-white/[0.06] hover:text-text',
+  }[variant];
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className={`inline-flex h-8 w-8 items-center justify-center rounded-xl border px-0 transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${styles}`}
+    >
+      {children}
+    </button>
+  );
+}
+
 interface Candidate {
   id: string;
   type?: string;
@@ -145,14 +177,21 @@ function CandidateCard({
   candidate,
   selected,
   onSelect,
+  onApprove,
+  onReject,
+  actionId,
 }: {
   candidate: Candidate;
   selected: boolean;
   onSelect: () => void;
+  onApprove: (candidate: Candidate) => void;
+  onReject: (candidate: Candidate) => void;
+  actionId: string | null;
 }) {
   const confidence = confidenceValue(candidate);
   const tags = parseList(candidate.tags);
   const isPending = candidate.status === 'pending' || candidate.status === 'pending_review';
+  const isProcessing = actionId === candidate.id;
 
   return (
     <button
@@ -183,7 +222,27 @@ function CandidateCard({
             {tags.slice(0, 2).map((tag) => <span key={tag} className="text-sky-300/70">#{tag}</span>)}
           </div>
         </div>
-        <ChevronRight size={17} className={`mt-1 shrink-0 transition-transform ${selected ? 'translate-x-0.5 text-sky-300' : 'text-text-subtle group-hover:translate-x-0.5 group-hover:text-text-muted'}`} />
+        {isPending && (
+          <div className="flex items-center gap-1.5 ml-auto shrink-0">
+            <InlineActionButton
+              variant="primary"
+              onClick={() => onApprove(candidate)}
+              disabled={isProcessing}
+              title="Approve candidate"
+            >
+              <Check size={14} className={isProcessing ? 'animate-pulse' : ''} />
+            </InlineActionButton>
+            <InlineActionButton
+              variant="danger"
+              onClick={() => onReject(candidate)}
+              disabled={isProcessing}
+              title="Reject candidate"
+            >
+              <XCircle size={14} />
+            </InlineActionButton>
+          </div>
+        )}
+        {!isPending && <ChevronRight size={17} className={`mt-1 shrink-0 transition-transform ${selected ? 'translate-x-0.5 text-sky-300' : 'text-text-subtle group-hover:translate-x-0.5 group-hover:text-text-muted'}`} />}
       </div>
     </button>
   );
@@ -357,7 +416,7 @@ export function CurateRoute() {
         ) : (
           <section className="flex min-w-0 flex-col gap-3">
             <div className="flex items-center justify-between"><div><p className="text-sm font-semibold text-text">Candidate queue</p><p className="text-xs text-text-muted">{visibleCandidates.length} of {candidates.length} candidates visible</p></div><span className="rounded-full bg-white/[0.06] px-2.5 py-1 text-xs text-text-muted">{statusFilter === 'all' ? 'All candidates' : statusLabel(statusFilter)}</span></div>
-            {visibleCandidates.length ? visibleCandidates.map((candidate) => <CandidateCard key={`${candidate.id}:${candidate._filename ?? ''}`} candidate={candidate} selected={candidate.id === selectedId} onSelect={() => setSelectedId(candidate.id)} />) : <div className="rounded-2xl border border-dashed border-white/10 px-5 py-12 text-center"><ClipboardCheck size={28} className="mx-auto text-text-subtle" /><p className="mt-3 text-sm font-medium text-text">No candidates match</p><p className="mt-1 text-xs text-text-muted">Try another status, vault, or search term.</p></div>}
+            {visibleCandidates.length ? visibleCandidates.map((candidate) => <CandidateCard key={`${candidate.id}:${candidate._filename ?? ''}`} candidate={candidate} selected={candidate.id === selectedId} onSelect={() => setSelectedId(candidate.id)} onApprove={(c) => void performAction(c, 'approve')} onReject={(c) => { setRejecting(c); setRejectReason(''); }} actionId={actionId} />) : <div className="rounded-2xl border border-dashed border-white/10 px-5 py-12 text-center"><ClipboardCheck size={28} className="mx-auto text-text-subtle" /><p className="mt-3 text-sm font-medium text-text">No candidates match</p><p className="mt-1 text-xs text-text-muted">Try another status, vault, or search term.</p></div>}
           </section>
         )}
       </div>
