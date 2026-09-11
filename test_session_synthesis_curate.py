@@ -1,6 +1,8 @@
 import sys
 import types
 
+import pytest
+
 import handlers
 
 
@@ -8,7 +10,7 @@ CANDIDATE = {
     "candidate_id": "cand-new123",
     "synthesis_id": "synth-123",
     "session_id": "session-123",
-    "vault_id": "core",
+    "vault_id": "projects-knowledge",
     "source": "session_synthesis",
     "title": "Read Write Path Independence",
     "definition": "Read and write paths should remain independently testable.",
@@ -26,7 +28,7 @@ CANDIDATE = {
 def _install_proxy(monkeypatch, **overrides):
     proxy = types.ModuleType("synthesis_activity_proxy")
     proxy.load_synthesis_candidates = lambda **kwargs: {
-        "vault_id": "core",
+        "vault_id": "projects-knowledge",
         "count": 1,
         "candidates": [CANDIDATE],
     }
@@ -39,10 +41,10 @@ def _install_proxy(monkeypatch, **overrides):
     return proxy
 
 
-def test_core_curate_lists_bdh_session_synthesis_candidates(monkeypatch):
+def test_curate_lists_bdh_session_synthesis_candidates(monkeypatch):
     _install_proxy(monkeypatch)
 
-    candidates = handlers.list_candidates(vault="core")
+    candidates = handlers.list_candidates(vault="projects-knowledge")
 
     assert len(candidates) == 1
     candidate = candidates[0]
@@ -54,16 +56,16 @@ def test_core_curate_lists_bdh_session_synthesis_candidates(monkeypatch):
     assert candidate["sourceNodeIds"] == ["vault:wiki/a.md", "vault:wiki/b.md"]
 
 
-def test_core_vault_summary_counts_pending_review(monkeypatch):
+def test_vault_summary_counts_pending_review(monkeypatch):
     _install_proxy(monkeypatch)
 
-    core = next(vault for vault in handlers.list_vaults() if vault["id"] == "core")
+    project_vault = next(vault for vault in handlers.list_vaults() if vault["id"] == "projects-knowledge")
 
-    assert core["candidate_count"] == 1
-    assert core["pending_count"] == 1
+    assert project_vault["candidate_count"] == 1
+    assert project_vault["pending_count"] == 1
 
 
-def test_core_curate_approval_applies_bdh_candidate(monkeypatch):
+def test_curate_approval_applies_bdh_candidate(monkeypatch):
     calls = []
 
     def approve(**kwargs):
@@ -76,7 +78,7 @@ def test_core_curate_approval_applies_bdh_candidate(monkeypatch):
 
     _install_proxy(monkeypatch, approve_synthesis_candidate=approve, apply_synthesis_candidate=apply)
 
-    result = handlers.approve("cand-new123", vault="core")
+    result = handlers.approve("cand-new123", vault="projects-knowledge")
 
     assert result["id"] == "cand-new123"
     assert result["status"] == "created"
@@ -152,7 +154,7 @@ def test_source_notes_resolve_title_inside_selected_vault(tmp_path):
     assert notes[1]["path"] == str(note)
 
 
-def test_core_curate_rejection_is_kept_in_local_feedback_log(monkeypatch):
+def test_curate_rejection_is_kept_in_local_feedback_log(monkeypatch):
     recorded = {}
 
     def record_rejection(**kwargs):
@@ -162,10 +164,144 @@ def test_core_curate_rejection_is_kept_in_local_feedback_log(monkeypatch):
     proxy = _install_proxy(monkeypatch)
     proxy.session_synthesis_rejections = types.SimpleNamespace(record_rejection=record_rejection)
 
-    result = handlers.reject("cand-new123", reason="duplicated", vault="core")
+    result = handlers.reject("cand-new123", reason="duplicated", vault="projects-knowledge")
 
     assert result["id"] == "cand-new123"
     assert result["status"] == "rejected"
     assert recorded["candidate_id"] == "cand-new123"
     assert recorded["synthesis_id"] == "synth-123"
     assert recorded["reason"] == "duplicated"
+
+
+def test_bdh_default_vault_is_discovered_without_synthetic_core(monkeypatch):
+    calls = []
+    proxy = _install_proxy(monkeypatch)
+
+    def load_candidates(**kwargs):
+        calls.append(kwargs)
+        return {
+            "vault_id": "projects-knowledge",
+            "count": 0,
+            "candidates": [],
+        }
+
+    proxy.load_synthesis_candidates = load_candidates
+    monkeypatch.setattr(handlers, "_load_vaults", lambda: {})
+    monkeypatch.setattr(handlers, "_load_routing_vaults", lambda: {})
+
+    vaults = handlers.list_vaults()
+
+    assert [vault["id"] for vault in vaults] == ["projects-knowledge"]
+    assert vaults[0]["candidate_enabled"] is True
+    assert calls[0] == {"vault_id": None, "status": None}
+
+
+def test_bdh_unknown_vault_is_not_converted_to_empty_queue(monkeypatch):
+    proxy = _install_proxy(monkeypatch)
+
+    class UnknownVaultError(RuntimeError):
+        status_code = 400
+
+    def load_candidates(**kwargs):
+        raise UnknownVaultError("Unknown vault 'missing'")
+
+    proxy.load_synthesis_candidates = load_candidates
+
+    with pytest.raises(handlers.CurateIntegrationError) as error:
+        handlers.list_candidates(vault="missing")
+
+    assert error.value.status_code == 400
+    assert error.value.code == "invalid_vault"
+
+
+def test_candidate_without_vault_id_does_not_gain_core_fallback():
+    candidate = handlers._normalize_session_synthesis_candidate(
+        {"candidate_id": "candidate-1", "definition": "Definition"}
+    )
+
+    assert candidate["vault_id"] == ""
+
+
+def test_bdh_unavailable_is_not_converted_to_empty_queue(monkeypatch):
+    proxy = _install_proxy(monkeypatch)
+
+    class UnavailableError(RuntimeError):
+        status_code = 502
+
+    def load_candidates(**kwargs):
+        raise UnavailableError("BDH unavailable")
+
+    proxy.load_synthesis_candidates = load_candidates
+
+    with pytest.raises(handlers.CurateIntegrationError) as error:
+        handlers.list_candidates(vault="projects-knowledge")
+
+    assert error.value.status_code == 502
+    assert error.value.code == "bdh_unavailable"
+
+
+def test_explicit_legacy_vault_merges_local_and_bdh_candidates(monkeypatch, tmp_path):
+    candidates_dir = tmp_path / "candidates"
+    candidates_dir.mkdir()
+    (candidates_dir / "legacy.md").write_text(
+        "---\n"
+        "id: legacy-1\n"
+        "title: Legacy candidate\n"
+        "status: pending\n"
+        "---\n\n"
+        "Legacy body.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_load_vaults",
+        lambda: {"legacy": {"candidates_dir": str(candidates_dir)}},
+    )
+    monkeypatch.setattr(handlers, "_load_routing_vaults", lambda: {})
+    proxy = _install_proxy(monkeypatch)
+    bdh_candidate = {**CANDIDATE, "vault_id": "legacy"}
+    proxy.load_synthesis_candidates = lambda **kwargs: {
+        "vault_id": "legacy",
+        "count": 1,
+        "candidates": [bdh_candidate],
+    }
+
+    candidates = handlers.list_candidates(vault="legacy")
+
+    assert {candidate["id"] for candidate in candidates} == {"legacy-1", "cand-new123"}
+
+
+def test_mutation_rejects_candidate_from_different_vault(monkeypatch):
+    _install_proxy(monkeypatch)
+
+    with pytest.raises(handlers.CurateIntegrationError) as error:
+        handlers.approve("cand-new123", vault="different-vault")
+
+    assert error.value.status_code == 409
+    assert error.value.code == "vault_mismatch"
+
+    with pytest.raises(handlers.CurateIntegrationError) as reject_error:
+        handlers.reject("cand-new123", reason="wrong scope", vault="different-vault")
+
+    assert reject_error.value.status_code == 409
+    assert reject_error.value.code == "vault_mismatch"
+
+
+def test_malformed_vault_is_rejected_without_a_bdh_proxy(monkeypatch):
+    monkeypatch.setitem(sys.modules, "synthesis_activity_proxy", None)
+
+    with pytest.raises(handlers.CurateIntegrationError) as error:
+        handlers.list_candidates(vault="../invalid")
+
+    assert error.value.status_code == 400
+    assert error.value.code == "invalid_vault"
+
+    with pytest.raises(handlers.CurateIntegrationError) as approve_error:
+        handlers.approve("candidate-1", vault="../invalid")
+    assert approve_error.value.status_code == 400
+    assert approve_error.value.code == "invalid_vault"
+
+    with pytest.raises(handlers.CurateIntegrationError) as reject_error:
+        handlers.reject("candidate-1", reason="invalid scope", vault="../invalid")
+    assert reject_error.value.status_code == 400
+    assert reject_error.value.code == "invalid_vault"

@@ -51,6 +51,7 @@ function InlineActionButton({
 
 interface Candidate {
   id: string;
+  vault_id?: string;
   type?: string;
   title?: string;
   status: string;
@@ -252,7 +253,7 @@ export function CurateRoute() {
   const [token, setToken] = useState('');
   const [vaults, setVaults] = useState<VaultInfo[]>([]);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
-  const [selectedVault, setSelectedVault] = useState(searchParams.get('vault') || 'core');
+  const [selectedVault, setSelectedVault] = useState(searchParams.get('vault') || '');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [sortMode, setSortMode] = useState<SortMode>('newest');
@@ -274,12 +275,22 @@ export function CurateRoute() {
     setRefreshing(true);
     setError(null);
     try {
+      const candidatePath = selectedVault
+        ? `/candidates?vault=${encodeURIComponent(selectedVault)}`
+        : '/candidates';
       const [candidatePayload, vaultPayload] = await Promise.all([
-        requestJSON<{ candidates: Candidate[] }>(`/candidates?vault=${encodeURIComponent(selectedVault)}`, token),
-        requestJSON<{ vaults: VaultInfo[] }>('/candidates/vaults', token),
+        requestJSON<{ candidates: Candidate[]; vault?: string | null }>(candidatePath, token),
+        requestJSON<{ vaults: VaultInfo[]; default_vault?: string | null }>('/candidates/vaults', token),
       ]);
-      setCandidates(candidatePayload.candidates || []);
+      const nextCandidates = candidatePayload.candidates || [];
+      const nextVault = selectedVault
+        || candidatePayload.vault
+        || vaultPayload.default_vault
+        || nextCandidates.find((candidate) => candidate.vault_id)?.vault_id
+        || '';
+      setCandidates(nextCandidates);
       setVaults(vaultPayload.vaults || []);
+      if (!selectedVault && nextVault) setSelectedVault(nextVault);
       // Details are opt-in: never open a candidate automatically on load.
       setSelectedId(null);
     } catch (cause) {
@@ -314,10 +325,11 @@ export function CurateRoute() {
   const performAction = async (candidate: Candidate, action: 'approve' | 'reject', reason = '') => {
     setActionId(candidate.id);
     setError(null);
+    const vault = selectedVault || candidate.vault_id || '';
     try {
       await requestJSON(action === 'approve' ? '/candidates/approve' : '/candidates/reject', token, {
         method: 'POST',
-        body: JSON.stringify({ id: candidate.id, vault: selectedVault, ...(reason ? { reason } : {}) }),
+        body: JSON.stringify({ id: candidate.id, vault, ...(reason ? { reason } : {}) }),
       });
       setNotice(action === 'approve' ? 'Candidate approved and moved to quarantine.' : 'Candidate rejected.');
       setRejecting(null);

@@ -109,6 +109,23 @@ Backend endpoint paths are relative to `/api/local`:
 | POST | `/candidates/approve` | `/api/local/candidates/approve` | Approve a candidate and start quarantine |
 | POST | `/candidates/reject` | `/api/local/candidates/reject` | Reject a candidate with human feedback |
 
+When `/candidates` is called without a `vault` query parameter, Curate asks
+BDH to resolve its configured default vault and returns that resolved ID in the
+`vault` field. `/candidates/vaults` returns the same dynamic default as
+`default_vault`. Curate never assumes that a vault named `core` exists.
+
+The Mission Control telemetry process must expose the BDH endpoint through its
+runtime environment, for example:
+
+```text
+BDH_API_URL=http://127.0.0.1:<bdh-api-port>
+```
+
+The BDH API port is separate from the Mission Control telemetry port. Configure
+both processes with their respective endpoints. If BDH is unavailable or
+rejects a vault, Curate returns an error envelope; it does not turn the
+failure into an empty candidate list.
+
 ### Candidate response
 
 A candidate normally contains:
@@ -238,11 +255,12 @@ For backend smoke checks:
 
 ```bash
 TOKEN="$(grep '^MISSION_CONTROL_TOKEN=' /path/to/hermes-mission-control/.env | cut -d= -f2-)"
+MC_URL="${MISSION_CONTROL_LOCAL_TELEMETRY_URL:?Set the Mission Control telemetry URL}"
 curl -H "Authorization: Bearer ${TOKEN}" \
-  http://127.0.0.1:8765/api/local/plugins
+  "$MC_URL/api/local/plugins"
 
 curl -H "Authorization: Bearer ${TOKEN}" \
-  'http://127.0.0.1:8765/api/local/candidates?vault=core'
+  "$MC_URL/api/local/candidates"
 ```
 
 Expected plugin discovery includes:
@@ -274,8 +292,9 @@ Before pushing a plugin change:
 Useful local performance check:
 
 ```bash
+MC_URL="${MISSION_CONTROL_LOCAL_TELEMETRY_URL:?Set the Mission Control telemetry URL}"
 time curl -H "Authorization: Bearer ${TOKEN}" \
-  'http://127.0.0.1:8765/api/local/candidates?vault=core' >/tmp/curate.json
+  "$MC_URL/api/local/candidates" >/tmp/curate.json
 ```
 
 Source-note indexing and caching should keep the response fast even when the vault contains many Markdown files.
@@ -301,8 +320,9 @@ curl -I http://127.0.0.1:5174/src/plugins/curate/route.ts
 Check the telemetry endpoint directly:
 
 ```bash
+MC_URL="${MISSION_CONTROL_LOCAL_TELEMETRY_URL:?Set the Mission Control telemetry URL}"
 curl -i -H "Authorization: Bearer ${TOKEN}" \
-  'http://127.0.0.1:8765/api/local/candidates?vault=core'
+  "$MC_URL/api/local/candidates"
 ```
 
 If the response is 500, inspect the telemetry error log. Common causes include a stale telemetry process after a plugin update or non-JSON-safe YAML values such as Python `date` objects.
