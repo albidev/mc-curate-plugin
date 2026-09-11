@@ -279,7 +279,24 @@ def list_vaults() -> List[Dict[str, Any]]:
         candidate_enabled = vid == bdh_default or bool(candidate_config.get("candidates_dir"))
         writable = _as_bool(routing_config.get("writable"), default=True)
         candidate_dir = _candidates_dir(vid) if candidate_enabled else None
-        candidates = list_candidates(vault=vid) if candidate_enabled else []
+        try:
+            candidates = list_candidates(vault=vid) if candidate_enabled else []
+        except CurateIntegrationError as exc:
+            out.append({
+                "id": vid,
+                "label": candidate_config.get("label") or routing_config.get("name") or _display_vault_label(vid),
+                "candidates_dir": str(candidate_dir) if candidate_dir else "",
+                "candidate_enabled": False,
+                "review_enabled": False,
+                "writable": False,
+                "read_only": True,
+                "mode": "error",
+                "candidate_count": 0,
+                "pending_count": 0,
+                "reviewed_count": 0,
+                "error": exc.message,
+            })
+            continue
         review_enabled = "review_inbox" in routes
         if candidate_enabled:
             mode = "candidates"
@@ -301,6 +318,7 @@ def list_vaults() -> List[Dict[str, Any]]:
             "candidate_count": len(candidates),
             "pending_count": sum(1 for c in candidates if c.get("status") in {"pending", "pending_review"}),
             "reviewed_count": sum(1 for c in candidates if c.get("status") not in {"pending", "pending_review"}),
+            "error": None,
         })
     return out
 
@@ -612,7 +630,16 @@ def list_candidates(status: Optional[str] = None, vault: Optional[str] = None) -
     if bdh_candidates is None:
         return legacy
     if vault and legacy:
-        return legacy + bdh_candidates
+        merged: Dict[str, Dict[str, Any]] = {
+            str(candidate.get("id")): candidate
+            for candidate in legacy
+            if candidate.get("id")
+        }
+        for candidate in bdh_candidates:
+            candidate_id = str(candidate.get("id") or "")
+            if candidate_id:
+                merged[candidate_id] = candidate
+        return list(merged.values())
     return bdh_candidates
 
 
@@ -769,7 +796,11 @@ def promote_ready() -> List[Dict[str, Any]]:
             return Path(os.path.expanduser(str(m["vault_dir"])))
         return Path(os.environ.get("VB_VAULT", str(hermes_vault_dir())))
 
-    targets = [(str(_candidates_dir(None)), vault_target(_default_bdh_vault_id() or ""))]
+    try:
+        default_vault = _default_bdh_vault_id() or ""
+    except CurateIntegrationError:
+        default_vault = ""
+    targets = [(str(_candidates_dir(None)), vault_target(default_vault))]
     for vid, m in mapping.items():
         if m.get("candidates_dir"):
             targets.append((m["candidates_dir"], vault_target(vid)))

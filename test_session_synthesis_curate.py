@@ -271,6 +271,69 @@ def test_explicit_legacy_vault_merges_local_and_bdh_candidates(monkeypatch, tmp_
     assert {candidate["id"] for candidate in candidates} == {"legacy-1", "cand-new123"}
 
 
+def test_stale_configured_vault_does_not_break_vault_listing(monkeypatch):
+    monkeypatch.setattr(
+        handlers,
+        "_load_vaults",
+        lambda: {"stale": {"candidates_dir": "/tmp/stale-curate-candidates"}},
+    )
+    monkeypatch.setattr(handlers, "_load_routing_vaults", lambda: {})
+    proxy = _install_proxy(monkeypatch)
+
+    class UnknownVaultError(RuntimeError):
+        status_code = 400
+
+    def load_candidates(**kwargs):
+        if kwargs.get("vault_id") == "stale":
+            raise UnknownVaultError("Unknown vault 'stale'")
+        return {"vault_id": "projects-knowledge", "count": 0, "candidates": []}
+
+    proxy.load_synthesis_candidates = load_candidates
+
+    vaults = handlers.list_vaults()
+    stale = next(vault for vault in vaults if vault["id"] == "stale")
+
+    assert stale["mode"] == "error"
+    assert stale["candidate_enabled"] is False
+    assert "Unknown vault" in stale["error"]
+
+
+def test_legacy_and_bdh_merge_deduplicates_candidate_ids(monkeypatch, tmp_path):
+    candidates_dir = tmp_path / "candidates"
+    candidates_dir.mkdir()
+    (candidates_dir / "duplicate.md").write_text(
+        "---\n"
+        "id: cand-new123\n"
+        "title: Legacy duplicate\n"
+        "status: pending\n"
+        "---\n\nLegacy.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(handlers, "_load_vaults", lambda: {"legacy": {"candidates_dir": str(candidates_dir)}})
+    monkeypatch.setattr(handlers, "_load_routing_vaults", lambda: {})
+    proxy = _install_proxy(monkeypatch)
+    proxy.load_synthesis_candidates = lambda **kwargs: {
+        "vault_id": "legacy",
+        "count": 1,
+        "candidates": [{**CANDIDATE, "vault_id": "legacy"}],
+    }
+
+    candidates = handlers.list_candidates(vault="legacy")
+
+    assert len([candidate for candidate in candidates if candidate["id"] == "cand-new123"]) == 1
+    assert next(candidate for candidate in candidates if candidate["id"] == "cand-new123")["title"] == CANDIDATE["title"]
+
+
+def test_promote_ready_skips_dynamic_default_when_bdh_is_unavailable(monkeypatch):
+    def unavailable():
+        raise handlers.CurateIntegrationError(502, "bdh_unavailable", "BDH unavailable")
+
+    monkeypatch.setattr(handlers, "_default_bdh_vault_id", unavailable)
+    monkeypatch.setattr(handlers, "_candidates_dir", lambda vault=None: None)
+
+    assert handlers.promote_ready() == []
+
+
 def test_mutation_rejects_candidate_from_different_vault(monkeypatch):
     _install_proxy(monkeypatch)
 
