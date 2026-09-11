@@ -47,6 +47,28 @@ def _default_candidates_dir() -> Path:
     return _vault_brain_dir() / "candidates"
 
 
+_VAULT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+
+
+class CurateIntegrationError(RuntimeError):
+    """A BDH/vault integration failure safe to expose at the HTTP boundary."""
+
+    def __init__(self, status_code: int, code: str, message: str):
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+        self.message = message
+
+
+def _validate_vault_id(vault: Optional[str]) -> Optional[str]:
+    if vault is None or not str(vault).strip():
+        return None
+    value = str(vault).strip()
+    if not _VAULT_ID_RE.fullmatch(value):
+        raise CurateIntegrationError(400, "invalid_vault", "Vault ID has an invalid format.")
+    return value
+
+
 def _session_synthesis_proxy():
     """Return the Mission Control proxy for BDH-owned session candidates."""
     try:
@@ -54,6 +76,38 @@ def _session_synthesis_proxy():
     except ImportError:
         return None
     return synthesis_activity_proxy
+
+
+def _load_bdh_snapshot(vault: Optional[str], status: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Load a BDH snapshot while preserving integration errors for the API."""
+    vault_id = _validate_vault_id(vault)
+    proxy = _session_synthesis_proxy()
+    if proxy is None:
+        return None
+    try:
+        snapshot = proxy.load_synthesis_candidates(vault_id=vault_id, status=status)
+    except Exception as exc:  # noqa: BLE001 - adapter exceptions vary by host version
+        status_code = int(getattr(exc, "status_code", 502))
+        code = "invalid_vault" if 400 <= status_code < 500 else "bdh_unavailable"
+        raise CurateIntegrationError(status_code, code, str(exc)) from exc
+    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("candidates"), list):
+        raise CurateIntegrationError(502, "bdh_invalid_response", "BDH returned an invalid candidate response.")
+    resolved_vault = str(snapshot.get("vault_id") or "").strip()
+    if not resolved_vault or not _VAULT_ID_RE.fullmatch(resolved_vault):
+        raise CurateIntegrationError(502, "bdh_invalid_response", "BDH did not return a valid vault ID.")
+    return snapshot
+
+
+def _default_bdh_vault_id() -> Optional[str]:
+    snapshot = _load_bdh_snapshot(None, None)
+    if snapshot is None:
+        return None
+    return str(snapshot["vault_id"])
+
+
+def default_vault_id() -> Optional[str]:
+    """Return the vault selected by BDH when no explicit vault is supplied."""
+    return _default_bdh_vault_id()
 
 
 def _normalize_session_synthesis_candidate(raw: Dict[str, Any]) -> Dict[str, Any]:
@@ -72,7 +126,7 @@ def _normalize_session_synthesis_candidate(raw: Dict[str, Any]) -> Dict[str, Any
         "candidate_id": str(raw.get("candidate_id") or ""),
         "synthesis_id": str(raw.get("synthesis_id") or ""),
         "session_id": str(raw.get("session_id") or ""),
-        "vault_id": str(raw.get("vault_id") or "core"),
+        "vault_id": str(raw.get("vault_id") or ""),
         "source": str(raw.get("source") or "session_synthesis"),
         "title": str(raw.get("title") or ""),
         "body": str(raw.get("definition") or ""),
@@ -89,27 +143,48 @@ def _normalize_session_synthesis_candidate(raw: Dict[str, Any]) -> Dict[str, Any
 
 
 def _load_session_synthesis_candidate(candidate_id: str, vault: Optional[str]):
+    requested_vault = _validate_vault_id(vault)
     proxy = _session_synthesis_proxy()
     if proxy is None:
         return None, None
-    candidate = proxy.get_synthesis_candidate(candidate_id, vault_id=vault or "core")
+    vault_id = requested_vault or _default_bdh_vault_id()
+    try:
+        candidate = proxy.get_synthesis_candidate(candidate_id, vault_id=vault_id)
+    except Exception as exc:  # noqa: BLE001 - adapter exceptions vary by host version
+        status_code = int(getattr(exc, "status_code", 502))
+        code = "invalid_vault" if 400 <= status_code < 500 else "bdh_unavailable"
+        raise CurateIntegrationError(status_code, code, str(exc)) from exc
+    if candidate is not None:
+        _resolve_candidate_vault(candidate, vault)
     return candidate, proxy
 
 
+def _resolve_candidate_vault(candidate: Dict[str, Any], requested_vault: Optional[str]) -> str:
+    """Bind a mutation to the validated request/candidate vault pair."""
+    requested = _validate_vault_id(requested_vault)
+    candidate_vault = _validate_vault_id(candidate.get("vault_id"))
+    if requested and candidate_vault and requested != candidate_vault:
+        raise CurateIntegrationError(
+            409,
+            "vault_mismatch",
+            "The candidate does not belong to the requested vault.",
+        )
+    resolved = requested or candidate_vault or _default_bdh_vault_id()
+    if not resolved:
+        raise CurateIntegrationError(502, "bdh_invalid_response", "Candidate has no resolvable vault ID.")
+    return resolved
+
+
 def _load_bdh_candidates(vault: Optional[str], status: Optional[str]) -> Optional[List[Dict[str, Any]]]:
-    proxy = _session_synthesis_proxy()
-    if proxy is None:
+    snapshot = _load_bdh_snapshot(vault, status)
+    if snapshot is None:
         return None
-    try:
-        snapshot = proxy.load_synthesis_candidates(vault_id=vault or "core", status=status)
-        raw_candidates = snapshot.get("candidates", []) if isinstance(snapshot, dict) else []
-        return [
-            _normalize_session_synthesis_candidate(candidate)
-            for candidate in raw_candidates
-            if isinstance(candidate, dict)
-        ]
-    except Exception:
-        return None
+    raw_candidates = snapshot["candidates"]
+    return [
+        _normalize_session_synthesis_candidate(candidate)
+        for candidate in raw_candidates
+        if isinstance(candidate, dict)
+    ]
 
 
 def _vaults_file() -> Path:
@@ -152,7 +227,7 @@ def _load_routing_vaults() -> Dict[str, Dict[str, Any]]:
 
 def _candidate_vault_root(vault: Optional[str]) -> Path:
     """Resolve the source-note root for a Curate vault."""
-    if vault and vault != "core":
+    if vault:
         candidate_config = _load_vaults().get(vault) or {}
         if candidate_config.get("vault_dir"):
             return Path(os.path.expanduser(str(candidate_config["vault_dir"]))).resolve()
@@ -163,9 +238,8 @@ def _candidate_vault_root(vault: Optional[str]) -> Path:
 
 
 def _candidates_dir(vault: Optional[str] = None) -> Optional[Path]:
-    """Resolve a candidate directory without falling back to Core for known
-    non-candidate vaults."""
-    if vault and vault != "core":
+    """Resolve a candidate directory without falling back to a different vault."""
+    if vault:
         mapping = _load_vaults().get(vault)
         if mapping and mapping.get("candidates_dir"):
             return Path(os.path.expanduser(str(mapping["candidates_dir"])))
@@ -189,17 +263,40 @@ def list_vaults() -> List[Dict[str, Any]]:
     """Return every configured routing vault plus candidate capabilities."""
     candidate_map = _load_vaults()
     routing_map = _load_routing_vaults()
-    vault_ids = list(dict.fromkeys(["core", *routing_map.keys(), *candidate_map.keys()]))
+    bdh_default = _default_bdh_vault_id()
+    vault_ids: List[str] = []
+    if bdh_default:
+        vault_ids.append(bdh_default)
+    vault_ids.extend(str(vault_id) for vault_id in routing_map)
+    vault_ids.extend(str(vault_id) for vault_id in candidate_map)
+    vault_ids = list(dict.fromkeys(vault_ids))
     out: List[Dict[str, Any]] = []
     for vid in vault_ids:
         candidate_config = candidate_map.get(vid) or {}
         routing_config = routing_map.get(vid) or {}
         routes = routing_config.get("routes")
         routes = routes if isinstance(routes, dict) else {}
-        candidate_enabled = vid == "core" or bool(candidate_config.get("candidates_dir"))
+        candidate_enabled = vid == bdh_default or bool(candidate_config.get("candidates_dir"))
         writable = _as_bool(routing_config.get("writable"), default=True)
         candidate_dir = _candidates_dir(vid) if candidate_enabled else None
-        candidates = list_candidates(vault=vid) if candidate_enabled else []
+        try:
+            candidates = list_candidates(vault=vid) if candidate_enabled else []
+        except CurateIntegrationError as exc:
+            out.append({
+                "id": vid,
+                "label": candidate_config.get("label") or routing_config.get("name") or _display_vault_label(vid),
+                "candidates_dir": str(candidate_dir) if candidate_dir else "",
+                "candidate_enabled": False,
+                "review_enabled": False,
+                "writable": False,
+                "read_only": True,
+                "mode": "error",
+                "candidate_count": 0,
+                "pending_count": 0,
+                "reviewed_count": 0,
+                "error": exc.message,
+            })
+            continue
         review_enabled = "review_inbox" in routes
         if candidate_enabled:
             mode = "candidates"
@@ -221,14 +318,24 @@ def list_vaults() -> List[Dict[str, Any]]:
             "candidate_count": len(candidates),
             "pending_count": sum(1 for c in candidates if c.get("status") in {"pending", "pending_review"}),
             "reviewed_count": sum(1 for c in candidates if c.get("status") not in {"pending", "pending_review"}),
+            "error": None,
         })
     return out
 
 
 def can_curate(vault: Optional[str] = None) -> bool:
     """Return whether approve/reject mutations are allowed for a vault."""
-    vault_id = vault or "core"
-    if _candidates_dir(vault_id) is None:
+    vault_id = _validate_vault_id(vault)
+    if vault_id is None and _session_synthesis_proxy() is not None:
+        vault_id = _default_bdh_vault_id()
+    if vault_id is None:
+        return _candidates_dir(None) is not None
+    candidate_dir = _candidates_dir(vault_id)
+    if candidate_dir is None and _session_synthesis_proxy() is None:
+        return False
+    if _session_synthesis_proxy() is not None:
+        _load_bdh_snapshot(vault_id, None)
+    elif candidate_dir is None:
         return False
     routing_config = _load_routing_vaults().get(vault_id) or {}
     return _as_bool(routing_config.get("writable"), default=True)
@@ -509,13 +616,9 @@ def _write_candidate(path: Path, meta: Dict[str, Any], body: str) -> None:
 
 
 def list_candidates(status: Optional[str] = None, vault: Optional[str] = None) -> List[Dict[str, Any]]:
-    # BDH owns session_synthesis candidates. Core uses the new store as its
-    # complete source; non-core vaults merge it with their legacy nightly-brain
-    # queue during the migration window.
-    bdh_candidates = _load_bdh_candidates(vault, status)
-    if vault in (None, "core") and bdh_candidates is not None:
-        return bdh_candidates
-
+    # BDH owns session_synthesis candidates. When no vault is supplied, BDH
+    # resolves its configured default; explicitly configured legacy vaults may
+    # still merge their local nightly-brain queue during migration.
     d = _candidates_dir(vault)
     legacy: List[Dict[str, Any]] = []
     if d is not None and d.exists():
@@ -523,9 +626,21 @@ def list_candidates(status: Optional[str] = None, vault: Optional[str] = None) -
             c = _read_candidate(p, vault_root=_candidate_vault_root(vault))
             if c and (status is None or c.get("status") == status):
                 legacy.append(c)
-    if vault not in (None, "core") and bdh_candidates is not None:
-        return legacy + bdh_candidates
-    return legacy
+    bdh_candidates = _load_bdh_candidates(vault, status)
+    if bdh_candidates is None:
+        return legacy
+    if vault and legacy:
+        merged: Dict[str, Dict[str, Any]] = {
+            str(candidate.get("id")): candidate
+            for candidate in legacy
+            if candidate.get("id")
+        }
+        for candidate in bdh_candidates:
+            candidate_id = str(candidate.get("id") or "")
+            if candidate_id:
+                merged[candidate_id] = candidate
+        return list(merged.values())
+    return bdh_candidates
 
 
 def _find_by_id(cid: str, vault: Optional[str] = None, filename: Optional[str] = None) -> Optional[Path]:
@@ -549,7 +664,7 @@ def _quarantine_delta(vault: Optional[str] = None) -> timedelta:
     """Quarantine window for a vault. Per-vault override (quarantine_hours in
     the local curate-vaults.yaml) wins; otherwise the global VB_QUARANTINE_DAYS
     (default 1 day)."""
-    if vault and vault != "core":
+    if vault:
         mapping = _load_vaults().get(vault) or {}
         qh = mapping.get("quarantine_hours")
         if qh is not None:
@@ -571,7 +686,7 @@ def approve(cid: str, vault: Optional[str] = None, filename: Optional[str] = Non
             "candidate_id": candidate.get("candidate_id", ""),
             "synthesis_id": candidate.get("synthesis_id", ""),
             "session_id": candidate.get("session_id", ""),
-            "vault_id": candidate.get("vault_id") or vault or "core",
+            "vault_id": _resolve_candidate_vault(candidate, vault),
             "source": candidate.get("source") or "session_synthesis",
         }
         if candidate.get("status") != "approved":
@@ -605,7 +720,7 @@ def reject(cid: str, reason: str = "", vault: Optional[str] = None, filename: Op
             import session_synthesis_rejections as rejection_store
         rejection_store.record_rejection(
             candidate_id=str(candidate.get("candidate_id") or cid),
-            vault_id=str(candidate.get("vault_id") or vault or "core"),
+            vault_id=_resolve_candidate_vault(candidate, vault),
             synthesis_id=str(candidate.get("synthesis_id") or ""),
             session_id=str(candidate.get("session_id") or ""),
             title=str(candidate.get("title") or ""),
@@ -681,10 +796,12 @@ def promote_ready() -> List[Dict[str, Any]]:
             return Path(os.path.expanduser(str(m["vault_dir"])))
         return Path(os.environ.get("VB_VAULT", str(hermes_vault_dir())))
 
-    targets = [(str(_candidates_dir(None)), vault_target("core"))]
+    try:
+        default_vault = _default_bdh_vault_id() or ""
+    except CurateIntegrationError:
+        default_vault = ""
+    targets = [(str(_candidates_dir(None)), vault_target(default_vault))]
     for vid, m in mapping.items():
-        if vid == "core":
-            continue
         if m.get("candidates_dir"):
             targets.append((m["candidates_dir"], vault_target(vid)))
 
@@ -741,7 +858,7 @@ def vault_dirs_with_promotions() -> list:
 
 
 def vault_dir_for(vault_id: str) -> Path:
-    """Resolve the vault_dir for a vault id (default core -> VB_VAULT)."""
+    """Resolve the vault_dir for a vault ID, falling back to the Hermes vault."""
     mapping = _load_vaults()
     m = mapping.get(vault_id) or {}
     if m.get("vault_dir"):

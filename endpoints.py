@@ -37,12 +37,16 @@ def listCandidates(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any
     status = (params.get("status") or [None])[0] or None
     vault = (params.get("vault") or [None])[0] or None
     cands = handlers.list_candidates(status=status, vault=vault)
-    return {"candidates": cands, "count": len(cands), "vault": vault}
+    resolved_vault = vault or next((str(candidate.get("vault_id")) for candidate in cands if candidate.get("vault_id")), None)
+    resolved_vault = resolved_vault or handlers.default_vault_id()
+    return {"candidates": cands, "count": len(cands), "vault": resolved_vault}
 
 
 def listVaults(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any = None) -> Dict[str, Any]:
     """GET /api/local/candidates/vaults"""
-    return {"vaults": handlers.list_vaults()}
+    vaults = handlers.list_vaults()
+    default_vault = next((vault["id"] for vault in vaults if vault.get("candidate_enabled")), None)
+    return {"vaults": vaults, "default_vault": default_vault}
 
 
 # ---------------------------------------------------------------------------
