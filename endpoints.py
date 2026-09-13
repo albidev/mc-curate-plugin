@@ -82,3 +82,100 @@ def rejectCandidate(body: Dict[str, Any], params: Dict[str, List[str]], auth: An
     if not cand:
         raise PluginError(404, "not_found", f"Candidate {cid} not found.")
     return {"success": True, "candidate": cand}
+
+
+# ---------------------------------------------------------------------------
+# BDH session_synthesis endpoints
+#
+# These were previously hardcoded routes in Mission Control's telemetry server.
+# BDH integration is Curate-domain logic, so the plugin owns both the client
+# (``bdh_client``) and the HTTP surface it exposes. Paths are kept identical to
+# the old core routes so existing callers keep working unchanged.
+# ---------------------------------------------------------------------------
+
+def listSynthesisActivity(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any = None) -> Dict[str, Any]:
+    """GET /api/local/synthesis/activity?vault="""
+    vault = (params.get("vault") or [None])[0] or None
+    return handlers.load_synthesis_activity(vault)
+
+
+def listSynthesisCandidates(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any = None) -> Dict[str, Any]:
+    """GET /api/local/synthesis/candidates?vault=&status=&synthesis_id="""
+    vault = (params.get("vault") or [None])[0] or None
+    status = (params.get("status") or [None])[0] or None
+    synthesis_id = (params.get("synthesis_id") or [None])[0] or None
+    return handlers.load_synthesis_candidates(vault, status, synthesis_id)
+
+
+def applySynthesisCandidate(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any = None) -> Dict[str, Any]:
+    """POST /api/local/synthesis/apply
+
+    Vault isolation + tamper resistance: resolve the candidate from BDH within
+    the requested vault and forward BDH's own correlation tuple, never the
+    client-supplied synthesis/session ids.
+    """
+    candidate_id = str(body.get("candidate_id") or "").strip()
+    vault = str(body.get("vault") or "").strip() or None
+    if not candidate_id:
+        raise PluginError(400, "bad_request", "Missing candidate_id.")
+    candidate = handlers.get_synthesis_candidate(candidate_id, vault)
+    if candidate is None:
+        raise PluginError(
+            404,
+            "not_found",
+            f"Candidate {candidate_id} not found in vault {vault or 'default'}.",
+        )
+    correlation = {
+        "candidate_id": candidate["candidate_id"],
+        "synthesis_id": candidate["synthesis_id"],
+        "session_id": candidate["session_id"],
+        "vault_id": candidate["vault_id"],
+        "source": candidate["source"],
+    }
+    handlers.approve_synthesis_candidate(**correlation)
+    return handlers.apply_synthesis_candidate(**correlation)
+
+
+def rejectSynthesisCandidate(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any = None) -> Dict[str, Any]:
+    """POST /api/local/synthesis/reject
+
+    Reject is a local-only record: it never applies to BDH. The reason is
+    persisted so it can feed the model's next run.
+    """
+    candidate_id = str(body.get("candidate_id") or "").strip()
+    reason = str(body.get("reason") or "").strip()
+    vault = str(body.get("vault") or "").strip() or None
+    if not candidate_id:
+        raise PluginError(400, "bad_request", "Missing candidate_id.")
+    candidate = handlers.get_synthesis_candidate(candidate_id, vault)
+    if candidate is None:
+        raise PluginError(
+            404,
+            "not_found",
+            f"Candidate {candidate_id} not found in vault {vault or 'default'}.",
+        )
+    record = handlers.record_synthesis_rejection(
+        candidate_id=candidate_id,
+        vault_id=candidate["vault_id"],
+        synthesis_id=candidate["synthesis_id"],
+        session_id=candidate["session_id"],
+        title=candidate["title"],
+        reason=reason,
+    )
+    return {
+        "success": True,
+        "candidate_id": candidate_id,
+        "vault_id": candidate["vault_id"],
+        "status": "rejected",
+        "reason": reason,
+        "recorded": record,
+    }
+
+
+def revertSynthesis(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any = None) -> Dict[str, Any]:
+    """POST /api/local/synthesis/revert"""
+    operation_id = str(body.get("operation_id") or "").strip()
+    if not operation_id:
+        raise PluginError(400, "bad_request", "Missing operation_id.")
+    vault = str(body.get("vault") or "").strip() or None
+    return handlers.revert_synthesis(operation_id, vault)
