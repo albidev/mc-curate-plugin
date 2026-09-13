@@ -428,6 +428,13 @@ _SOURCE_PATH_CACHE: Dict[tuple[str, str], Optional[Path]] = {}
 _SOURCE_INDEX: Optional[Dict[str, Path]] = None
 _SOURCE_INDEX_ROOT: Optional[Path] = None
 _SOURCE_NOTE_CACHE: Dict[str, Dict[str, Any]] = {}
+# `(vault, needle)` -> resolved path for the title/full-text fallback. The loops it
+# caches are O(notes) each, and the same handful of titles recur across candidates.
+_SOURCE_TITLE_CACHE: Dict[tuple[str, str], Optional[Path]] = {}
+_SOURCE_TITLE_INDEX: Optional[Dict[str, Path]] = None
+_SOURCE_TITLE_INDEX_ROOT: Optional[Path] = None
+_SOURCE_TEXT_INDEX: Optional[Dict[str, str]] = None
+_SOURCE_TEXT_INDEX_ROOT: Optional[Path] = None
 
 
 def _source_index(vault: Path) -> Dict[str, Path]:
@@ -445,6 +452,76 @@ def _source_index(vault: Path) -> Dict[str, Path]:
     _SOURCE_INDEX_ROOT = vault
     _SOURCE_INDEX = index
     return index
+
+
+def _normalized_key(value: str) -> str:
+    """Casefolded, whitespace-collapsed form used for every title/label comparison."""
+    return " ".join(value.casefold().split())
+
+
+def _source_title_index(vault: Path) -> Dict[str, Path]:
+    """Map normalized frontmatter title -> path, reading each note ONCE per vault.
+
+    The title fallback below otherwise re-reads and YAML-parses every note in the
+    vault for every unresolved source; with ~850 notes and dozens of sources that
+    dominated the whole request (measured: ~40s of 42s, 33k YAML parses). The notes
+    never change during a request, so one pass builds the same answer.
+    """
+    global _SOURCE_TITLE_INDEX, _SOURCE_TITLE_INDEX_ROOT
+    if _SOURCE_TITLE_INDEX is not None and _SOURCE_TITLE_INDEX_ROOT == vault:
+        return _SOURCE_TITLE_INDEX
+    titles: Dict[str, Path] = {}
+    for candidate in _source_index(vault).values():
+        try:
+            parsed = _parse_frontmatter(candidate.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        title = _normalized_key(str(parsed.get("title") or ""))
+        if title:
+            titles.setdefault(title, candidate)
+    _SOURCE_TITLE_INDEX_ROOT = vault
+    _SOURCE_TITLE_INDEX = titles
+    return titles
+
+
+def _source_text_index(vault: Path) -> Dict[str, str]:
+    """Casefolded full text per note, read ONCE per vault for the token fallback."""
+    global _SOURCE_TEXT_INDEX, _SOURCE_TEXT_INDEX_ROOT
+    if _SOURCE_TEXT_INDEX is not None and _SOURCE_TEXT_INDEX_ROOT == vault:
+        return _SOURCE_TEXT_INDEX
+    texts: Dict[str, str] = {}
+    for candidate in _source_index(vault).values():
+        try:
+            texts[str(candidate)] = candidate.read_text(encoding="utf-8").casefold()
+        except OSError:
+            continue
+    _SOURCE_TEXT_INDEX_ROOT = vault
+    _SOURCE_TEXT_INDEX = texts
+    return texts
+
+
+def _resolve_by_title(value: str, vault: Path, cache_key: tuple[str, str]) -> Optional[Path]:
+    """Title, then token-containment fallback — each over one cached pass, not one per source."""
+    cached = _SOURCE_TITLE_CACHE.get(cache_key)
+    if cache_key in _SOURCE_TITLE_CACHE:
+        return cached
+
+    needle = _normalized_key(value)
+    for title, path in _source_title_index(vault).items():
+        if title and (needle == title or needle in title or title in needle):
+            _SOURCE_TITLE_CACHE[cache_key] = path
+            return path
+
+    tokens = [token for token in re.findall(r"[a-z0-9]+", needle) if len(token) >= 3]
+    if len(tokens) >= 2:
+        for path_str, text in _source_text_index(vault).items():
+            if all(token in text for token in tokens):
+                resolved = Path(path_str)
+                _SOURCE_TITLE_CACHE[cache_key] = resolved
+                return resolved
+
+    _SOURCE_TITLE_CACHE[cache_key] = None
+    return None
 
 
 def _source_path(source: Any, vault_root: Optional[Path] = None) -> Optional[Path]:
@@ -481,30 +558,9 @@ def _source_path(source: Any, vault_root: Optional[Path] = None) -> Optional[Pat
 
     # Legacy generators sometimes emitted a human title instead of a path.
     # Match only inside the selected vault and only against frontmatter titles.
-    needle = " ".join(value.casefold().split())
-    for candidate in index.values():
-        try:
-            parsed = _parse_frontmatter(candidate.read_text(encoding="utf-8"))
-        except OSError:
-            continue
-        title = " ".join(str(parsed.get("title") or "").casefold().split())
-        if title and (needle == title or needle in title or title in needle):
-            _SOURCE_PATH_CACHE[cache_key] = candidate
-            return candidate
-
-    needle = " ".join(value.casefold().split())
-    for candidate in index.values():
-        try:
-            text = candidate.read_text(encoding="utf-8").casefold()
-        except OSError:
-            continue
-        tokens = [token for token in re.findall(r"[a-z0-9]+", needle) if len(token) >= 3]
-        if len(tokens) >= 2 and all(token in text for token in tokens):
-            _SOURCE_PATH_CACHE[cache_key] = candidate
-            return candidate
-
-    _SOURCE_PATH_CACHE[cache_key] = None
-    return None
+    resolved = _resolve_by_title(value, vault, cache_key)
+    _SOURCE_PATH_CACHE[cache_key] = resolved
+    return resolved
 
 
 def _source_match_type(source: Any, path: Path) -> str:
@@ -513,12 +569,9 @@ def _source_match_type(source: Any, path: Path) -> str:
         value = value[6:]
     if Path(value).name.casefold() == path.name.casefold():
         return "found"
-    try:
-        parsed = _parse_frontmatter(path.read_text(encoding="utf-8"))
-    except OSError:
-        return "related"
-    needle = " ".join(value.casefold().split())
-    title = " ".join(str(parsed.get("title") or "").casefold().split())
+    note = _read_source_note(path)
+    needle = _normalized_key(value)
+    title = _normalized_key(str(note.get("title") or ""))
     return "found" if title and (needle == title or needle in title or title in needle) else "related"
 
 

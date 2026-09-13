@@ -154,6 +154,57 @@ def test_source_notes_resolve_title_inside_selected_vault(tmp_path):
     assert notes[1]["path"] == str(note)
 
 
+def test_title_fallback_reads_each_vault_note_once(tmp_path, monkeypatch):
+    """The title fallback must not re-read the whole vault per unresolved source.
+
+    It used to re-read and YAML-parse every note for every source, which on a real
+    vault (~850 notes, dozens of sources) dominated the request: measured ~40s of a
+    42s call, ~33k YAML parses. One cached pass per vault keeps the same answers.
+    """
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    for index in range(25):
+        note = vault / f"note-{index}.md"
+        note.write_text(
+            f"---\ntitle: Note Number {index}\n---\n\nBody text for note {index}.\n",
+            encoding="utf-8",
+        )
+
+    reads: list[str] = []
+    import pathlib
+    real_read_text = pathlib.Path.read_text
+
+    def counting_read_text(self, *args, **kwargs):
+        if self.suffix == ".md":
+            reads.append(str(self))
+        return real_read_text(self, *args, **kwargs)
+
+    # Reset whatever caches this version has, without assuming which exist: the
+    # guard must fail on the READ COUNT, not on a missing attribute.
+    for name in (
+        "_SOURCE_INDEX", "_SOURCE_INDEX_ROOT",
+        "_SOURCE_TITLE_INDEX", "_SOURCE_TITLE_INDEX_ROOT",
+        "_SOURCE_TEXT_INDEX", "_SOURCE_TEXT_INDEX_ROOT",
+    ):
+        if hasattr(handlers, name):
+            setattr(handlers, name, None)
+    for name in ("_SOURCE_TITLE_CACHE", "_SOURCE_PATH_CACHE", "_SOURCE_NOTE_CACHE"):
+        cache = getattr(handlers, name, None)
+        if isinstance(cache, dict):
+            cache.clear()
+
+    monkeypatch.setattr(pathlib.Path, "read_text", counting_read_text)
+    for index in range(12):
+        handlers._source_path(f"Note Number {index}", vault_root=vault)
+
+    # 25 notes for the title index + 25 for the text index; NOT 12 x 25.
+    assert len(reads) <= 2 * 25 + 12, f"vault re-read per source: {len(reads)} reads"
+
+    # And the answers are still right.
+    assert handlers._source_path("Note Number 7", vault_root=vault) == vault / "note-7.md"
+    assert handlers._source_path("note-3.md", vault_root=vault) == vault / "note-3.md"
+
+
 def test_curate_rejection_is_kept_in_local_feedback_log(monkeypatch):
     recorded = {}
 
