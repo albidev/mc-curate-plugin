@@ -70,12 +70,18 @@ def _validate_vault_id(vault: Optional[str]) -> Optional[str]:
 
 
 def _session_synthesis_proxy():
-    """Return the Mission Control proxy for BDH-owned session candidates."""
+    """Return the plugin's own BDH client.
+
+    The Curate plugin owns its BDH integration: this used to import Mission
+    Control's ``synthesis_activity_proxy``, which made the host carry the
+    plugin's domain logic and the plugin depend on the host for its own
+    feature. The client now lives next to this module as ``bdh_client``.
+    """
     try:
-        import synthesis_activity_proxy
+        import bdh_client
     except ImportError:
         return None
-    return synthesis_activity_proxy
+    return bdh_client
 
 
 def _load_bdh_snapshot(vault: Optional[str], status: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -717,7 +723,7 @@ def reject(cid: str, reason: str = "", vault: Optional[str] = None, filename: Op
     if candidate is not None and proxy is not None:
         rejection_store = getattr(proxy, "session_synthesis_rejections", None)
         if rejection_store is None:
-            import session_synthesis_rejections as rejection_store
+            import bdh_rejections as rejection_store
         rejection_store.record_rejection(
             candidate_id=str(candidate.get("candidate_id") or cid),
             vault_id=_resolve_candidate_vault(candidate, vault),
@@ -880,3 +886,154 @@ def rejection_feedback() -> str:
         if r:
             reasons.append(f"- {c.get('title', c.get('id'))}: {r}")
     return "\n".join(reasons)
+
+
+# ---------------------------------------------------------------------------
+# BDH session_synthesis facade
+#
+# The plugin's BDH client lives in ``bdh_client``. These wrappers keep the
+# endpoints layer thin (it talks to ``handlers`` only) and give the plugin a
+# single, stable seam for its BDH integration.
+# ---------------------------------------------------------------------------
+
+def _require_bdh_client():
+    client = _session_synthesis_proxy()
+    if client is None:
+        raise CurateIntegrationError(
+            502,
+            "bdh_unavailable",
+            "The BDH client is not available in this plugin installation.",
+        )
+    return client
+
+
+def _bdh_error(exc: Exception) -> CurateIntegrationError:
+    status_code = int(getattr(exc, "status_code", 502))
+    code = "invalid_vault" if 400 <= status_code < 500 else "bdh_unavailable"
+    return CurateIntegrationError(status_code, code, str(exc))
+
+
+def load_synthesis_activity(vault: Optional[str] = None) -> Dict[str, Any]:
+    """Load the vault-scoped BDH synthesis activity feed."""
+    client = _require_bdh_client()
+    try:
+        return client.load_synthesis_activity(_validate_vault_id(vault))
+    except CurateIntegrationError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - adapter exceptions vary by host version
+        raise _bdh_error(exc) from exc
+
+
+def load_synthesis_candidates(
+    vault: Optional[str] = None,
+    status: Optional[str] = None,
+    synthesis_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """List vault-scoped BDH session_synthesis candidates, review-safe.
+
+    Keeps the legacy call shape (``vault``/``status``/``synthesis_id``) so the
+    endpoint stays a drop-in replacement for the old core route.
+    """
+    client = _require_bdh_client()
+    vault_id = _validate_vault_id(vault)
+    try:
+        return client.load_synthesis_candidates(
+            vault_id=vault_id, status=status, synthesis_id=synthesis_id
+        )
+    except CurateIntegrationError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - adapter exceptions vary by host version
+        raise _bdh_error(exc) from exc
+
+
+def get_synthesis_candidate(candidate_id: str, vault: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Resolve one BDH candidate by id within a vault, or None."""
+    client = _require_bdh_client()
+    vault_id = _validate_vault_id(vault) or _default_bdh_vault_id()
+    try:
+        return client.get_synthesis_candidate(candidate_id, vault_id=vault_id)
+    except CurateIntegrationError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - adapter exceptions vary by host version
+        raise _bdh_error(exc) from exc
+
+
+def approve_synthesis_candidate(
+    candidate_id: str,
+    synthesis_id: str,
+    session_id: str,
+    vault_id: str,
+    source: str = "session_synthesis",
+) -> Dict[str, Any]:
+    """Record human approval in BDH before the apply call."""
+    client = _require_bdh_client()
+    try:
+        return client.approve_synthesis_candidate(
+            candidate_id=candidate_id,
+            synthesis_id=synthesis_id,
+            session_id=session_id,
+            vault_id=vault_id,
+            source=source,
+        )
+    except CurateIntegrationError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - adapter exceptions vary by host version
+        raise _bdh_error(exc) from exc
+
+
+def apply_synthesis_candidate(
+    candidate_id: str,
+    synthesis_id: str,
+    session_id: str,
+    vault_id: str,
+    source: str = "session_synthesis",
+) -> Dict[str, Any]:
+    """Apply an approved session_synthesis candidate via BDH."""
+    client = _require_bdh_client()
+    try:
+        return client.apply_synthesis_candidate(
+            candidate_id=candidate_id,
+            synthesis_id=synthesis_id,
+            session_id=session_id,
+            vault_id=vault_id,
+            source=source,
+        )
+    except CurateIntegrationError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - adapter exceptions vary by host version
+        raise _bdh_error(exc) from exc
+
+
+def revert_synthesis(operation_id: str, vault: Optional[str] = None) -> Dict[str, Any]:
+    """Revert an applied BDH synthesis operation."""
+    client = _require_bdh_client()
+    try:
+        return client.revert_synthesis(operation_id, _validate_vault_id(vault))
+    except CurateIntegrationError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - adapter exceptions vary by host version
+        raise _bdh_error(exc) from exc
+
+
+def record_synthesis_rejection(
+    *,
+    candidate_id: str,
+    vault_id: str,
+    synthesis_id: str = "",
+    session_id: str = "",
+    title: str = "",
+    reason: str = "",
+) -> Dict[str, Any]:
+    """Persist a Curate rejection locally; never calls BDH."""
+    client = _require_bdh_client()
+    store = getattr(client, "session_synthesis_rejections", None)
+    if store is None:
+        import bdh_rejections as store
+    return store.record_rejection(
+        candidate_id=candidate_id,
+        vault_id=vault_id,
+        synthesis_id=synthesis_id,
+        session_id=session_id,
+        title=title,
+        reason=reason,
+    )

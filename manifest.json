@@ -35,6 +35,36 @@
       "path": "/candidates/reject",
       "handler": "rejectCandidate",
       "authRequired": true
+    },
+    {
+      "method": "GET",
+      "path": "/synthesis/activity",
+      "handler": "listSynthesisActivity",
+      "authRequired": true
+    },
+    {
+      "method": "GET",
+      "path": "/synthesis/candidates",
+      "handler": "listSynthesisCandidates",
+      "authRequired": true
+    },
+    {
+      "method": "POST",
+      "path": "/synthesis/apply",
+      "handler": "applySynthesisCandidate",
+      "authRequired": true
+    },
+    {
+      "method": "POST",
+      "path": "/synthesis/reject",
+      "handler": "rejectSynthesisCandidate",
+      "authRequired": true
+    },
+    {
+      "method": "POST",
+      "path": "/synthesis/revert",
+      "handler": "revertSynthesis",
+      "authRequired": true
     }
   ]
 }
