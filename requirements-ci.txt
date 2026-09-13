@@ -1,0 +1,5 @@
+# Runtime + test dependencies for the Curate plugin CI.
+# The plugin is a Python HTTP surface loaded by the Mission Control plugin
+# loader; it has no third-party runtime dependency by design (stdlib only).
+pytest>=8.0
+PyYAML>=6.0

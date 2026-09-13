@@ -26,7 +26,7 @@ CANDIDATE = {
 
 
 def _install_proxy(monkeypatch, **overrides):
-    proxy = types.ModuleType("synthesis_activity_proxy")
+    proxy = types.ModuleType("bdh_client")
     proxy.load_synthesis_candidates = lambda **kwargs: {
         "vault_id": "projects-knowledge",
         "count": 1,
@@ -37,7 +37,7 @@ def _install_proxy(monkeypatch, **overrides):
     )
     for name, value in overrides.items():
         setattr(proxy, name, value)
-    monkeypatch.setitem(sys.modules, "synthesis_activity_proxy", proxy)
+    monkeypatch.setitem(sys.modules, "bdh_client", proxy)
     return proxy
 
 
@@ -351,7 +351,7 @@ def test_mutation_rejects_candidate_from_different_vault(monkeypatch):
 
 
 def test_malformed_vault_is_rejected_without_a_bdh_proxy(monkeypatch):
-    monkeypatch.setitem(sys.modules, "synthesis_activity_proxy", None)
+    monkeypatch.setitem(sys.modules, "bdh_client", None)
 
     with pytest.raises(handlers.CurateIntegrationError) as error:
         handlers.list_candidates(vault="../invalid")
