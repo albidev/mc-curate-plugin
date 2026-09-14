@@ -2,4 +2,4 @@
 # The plugin is a Python HTTP surface loaded by the Mission Control plugin
 # loader; it has no third-party runtime dependency by design (stdlib only).
 pytest>=9.1.1
-PyYAML>=6.0
+PyYAML>=6.0.3
