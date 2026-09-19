@@ -2,7 +2,7 @@
   "id": "curate",
   "name": "Curate",
   "description": "Nightly brain candidate approval queue",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "enabled": true,
   "routePath": "/curate",
   "navItem": {
@@ -64,6 +64,24 @@
       "method": "POST",
       "path": "/synthesis/revert",
       "handler": "revertSynthesis",
+      "authRequired": true
+    },
+    {
+      "method": "GET",
+      "path": "/candidates/clustered",
+      "handler": "listClusteredCandidates",
+      "authRequired": true
+    },
+    {
+      "method": "POST",
+      "path": "/candidates/restore",
+      "handler": "restoreAutoRejectedCandidate",
+      "authRequired": true
+    },
+    {
+      "method": "POST",
+      "path": "/candidates/classify",
+      "handler": "classifyPendingCandidates",
       "authRequired": true
     }
   ]

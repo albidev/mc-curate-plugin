@@ -179,3 +179,79 @@ def revertSynthesis(body: Dict[str, Any], params: Dict[str, List[str]], auth: An
         raise PluginError(400, "bad_request", "Missing operation_id.")
     vault = str(body.get("vault") or "").strip() or None
     return handlers.revert_synthesis(operation_id, vault)
+
+
+# ---------------------------------------------------------------------------
+# Jev gate pipeline (sidecar-backed; graceful no-op when sidecar is down)
+# ---------------------------------------------------------------------------
+
+import os
+import urllib.error
+import urllib.parse
+import urllib.request
+
+_SIDECAR_URL = os.environ.get("CURATE_SIDECAR_URL", "http://127.0.0.1:8775")
+
+
+def _sidecar_request(method: str, path: str, payload: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """Call the curate sidecar. Returns None when it is unavailable —
+    callers degrade to the pre-pipeline behavior instead of erroring."""
+    token = os.environ.get("MISSION_CONTROL_TOKEN", "").strip()
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    data = None
+    if payload is not None:
+        import json as _json
+        data = _json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        f"{_SIDECAR_URL}{path}", data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            import json as _json
+            return _json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+        return None
+
+
+def listClusteredCandidates(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any = None) -> Dict[str, Any]:
+    """GET /api/local/candidates/clustered — cluster view via the sidecar.
+
+    Sidecar down -> {"clusters": []} so the UI renders the flat list
+    (documented graceful degradation).
+    """
+    vault = (params.get("vault") or [None])[0] or None
+    query = f"?vault={urllib.parse.quote(vault)}" if vault else ""
+    result = _sidecar_request("GET", f"/api/local/candidates/clustered{query}")
+    if result is None or not isinstance(result, dict):
+        return {"clusters": [], "singletons": 0, "sidecar": "unavailable"}
+    return result
+
+
+def restoreAutoRejectedCandidate(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any = None) -> Dict[str, Any]:
+    """POST /api/local/candidates/restore — revert an auto_rejected candidate."""
+    cid = str(body.get("id") or "").strip()
+    if not cid:
+        raise PluginError(400, "bad_request", "Missing id.")
+    vault = str(body.get("vault") or "").strip() or None
+    if vault and not handlers.can_curate(vault):
+        raise PluginError(403, "vault_not_curable", "Candidate mutations are disabled for this vault.")
+    result = _sidecar_request("POST", "/api/local/candidates/restore", {"id": cid})
+    if result is None:
+        raise PluginError(503, "pipeline_unavailable",
+                          "Curate pipeline sidecar is unavailable; auto-rejects cannot be restored right now.")
+    if not result.get("success"):
+        raise PluginError(404, "not_found", f"Auto-rejected candidate {cid} not found.")
+    return result
+
+
+def classifyPendingCandidates(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any = None) -> Dict[str, Any]:
+    """POST /api/local/candidates/classify — run the Jev gate (idempotent)."""
+    vault = str(body.get("vault") or "").strip() or None
+    if vault and not handlers.can_curate(vault):
+        raise PluginError(403, "vault_not_curable", "Candidate mutations are disabled for this vault.")
+    result = _sidecar_request("POST", "/api/local/candidates/classify", {})
+    if result is None:
+        raise PluginError(503, "pipeline_unavailable",
+                          "Curate pipeline sidecar is unavailable.")
+    return result
