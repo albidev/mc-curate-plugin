@@ -171,11 +171,16 @@ def load_synthesis_candidates(
         if isinstance(entry, dict)
         and (not vault_id or str(entry.get("vault_id") or "") == vault_id)
     }
+    # auto_rejected candidates must stay VISIBLE (audit section + revert);
+    # the rejection ledger only hides already-rejected pending items.
     safe = [
         _safe_candidate(candidate)
         for candidate in candidates
         if isinstance(candidate, dict)
-        and str(candidate.get("candidate_id") or "") not in rejected_ids
+        and (
+            str(candidate.get("status") or "") == "auto_rejected"
+            or str(candidate.get("candidate_id") or "") not in rejected_ids
+        )
     ]
     return {
         "vault_id": raw.get("vault_id"),
