@@ -2,17 +2,21 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Archive,
+  Bot,
   Check,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   ClipboardCheck,
   Clock3,
   Inbox,
+  Layers,
   Loader2,
   RefreshCw,
   Search,
   ShieldCheck,
   Sparkles,
+  Undo2,
   X,
   XCircle,
 } from 'lucide-react';
@@ -28,7 +32,7 @@ function InlineActionButton({
   title,
 }: {
   variant: 'primary' | 'danger' | 'ghost';
-  onClick: () => void;
+  onClick: (e: React.MouseEvent) => void;
   disabled?: boolean;
   children: React.ReactNode;
   title: string;
@@ -69,6 +73,13 @@ interface Candidate {
   rejection_reason?: string;
   quarantine_until?: string;
   promoted_at?: string;
+  cluster_id?: string;
+  cluster_members?: string;
+  jev_choice?: string;
+  jev_confidence?: string;
+  jev_criteria_version?: string;
+  auto_rejected_at?: string;
+  auto_reject_reverted_at?: string;
   _filename?: string;
   sourceNotes?: Array<{ source: string; found: boolean; match_type?: 'found' | 'related' | 'missing'; title: string; path?: string; body: string }>;
   sourceNodeIds?: string[];
@@ -86,8 +97,19 @@ interface VaultInfo {
   error?: string | null;
 }
 
-type StatusFilter = 'all' | 'pending' | 'approved' | 'applied' | 'rejected' | 'promoted';
+type StatusFilter = 'all' | 'pending' | 'approved' | 'applied' | 'rejected' | 'promoted' | 'auto_rejected';
 type SortMode = 'newest' | 'oldest' | 'confidence';
+
+interface ClusterInfo {
+  cluster_id: string;
+  representative: string;
+  representative_title: string;
+  member_ids: string[];
+  member_titles: string[];
+  similarities: Record<string, number>;
+  best_similarity: number | null;
+  mean_similarity: number | null;
+}
 
 const API_BASE = '/api/local';
 
@@ -118,10 +140,18 @@ function statusLabel(status: string): string {
 }
 
 function statusTone(status: string): string {
-  if (status === 'pending' || status === 'pending_review') return 'border-amber-400/25 bg-amber-400/10 text-amber-300';
+  if (status === 'pending' || status === 'pending_review' || status === 'pre_approved') return 'border-amber-400/25 bg-amber-400/10 text-amber-300';
   if (status === 'approved' || status === 'promoted' || status === 'applied' || status === 'created' || status === 'merged') return 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300';
   if (status === 'rejected') return 'border-rose-400/25 bg-rose-400/10 text-rose-300';
+  if (status === 'auto_rejected') return 'border-orange-400/25 bg-orange-400/10 text-orange-300';
   return 'border-white/10 bg-white/[0.04] text-text-muted';
+}
+
+function jevTone(confidence: number | null): string {
+  if (confidence === null) return 'text-text-subtle';
+  if (confidence >= 0.8) return 'text-emerald-300';
+  if (confidence >= 0.6) return 'text-amber-300';
+  return 'text-rose-300';
 }
 
 function confidenceValue(candidate: Candidate): number | null {
@@ -160,12 +190,14 @@ function Button({
   disabled,
   onClick,
   type = 'button',
+  title,
 }: {
   children: React.ReactNode;
   variant?: 'primary' | 'secondary' | 'danger' | 'ghost';
   disabled?: boolean;
   onClick?: () => void;
   type?: 'button' | 'submit';
+  title?: string;
 }) {
   const styles = {
     primary: 'border-emerald-400/30 bg-emerald-400/15 text-emerald-200 hover:bg-emerald-400/25',
@@ -179,10 +211,170 @@ function Button({
       type={type}
       disabled={disabled}
       onClick={onClick}
+      title={title}
       className={`inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border px-3 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${styles}`}
     >
       {children}
     </button>
+  );
+}
+
+function ClusterCard({
+  cluster,
+  candidates,
+  expanded,
+  onToggle,
+  onApprove,
+  onReject,
+  onSelectMember,
+  actionId,
+}: {
+  cluster: ClusterInfo;
+  candidates: Candidate[];
+  expanded: boolean;
+  onToggle: () => void;
+  onApprove: (candidate: Candidate) => void;
+  onReject: (candidate: Candidate) => void;
+  onSelectMember: (candidate: Candidate) => void;
+  actionId: string | null;
+}) {
+  const rep = candidates.find((c) => c.id === cluster.representative);
+  const members = cluster.member_ids
+    .map((id) => candidates.find((c) => c.id === id))
+    .filter((c): c is Candidate => Boolean(c));
+  const others = members.filter((c) => c.id !== cluster.representative);
+  const isProcessing = actionId === cluster.representative;
+
+  return (
+    <div className="rounded-2xl border border-sky-400/20 bg-sky-400/[0.04] p-4 transition-colors hover:border-sky-400/30">
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-sky-400/10 text-sky-300">
+          <Layers size={17} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="mb-1 flex flex-wrap items-center gap-2">
+            <span className="rounded-full border border-sky-400/25 bg-sky-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-sky-300">
+              Cluster · {cluster.member_ids.length} candidates
+            </span>
+            {cluster.mean_similarity !== null && (
+              <span className="text-[11px] text-text-subtle">
+                similarity mean {(cluster.mean_similarity * 100).toFixed(0)}%
+              </span>
+            )}
+            {rep && rep.jev_choice && (
+              <span className={`text-[11px] ${jevTone(rep.jev_confidence ? Number(rep.jev_confidence) : null)}`}>
+                jev: {rep.jev_choice}{rep.jev_confidence ? ` ${Math.round(Number(rep.jev_confidence) * 100)}%` : ''}
+              </span>
+            )}
+          </div>
+          <h3 className="truncate text-[15px] font-semibold text-text">{cluster.representative_title || cluster.representative}</h3>
+          <p className="mt-1 line-clamp-2 text-sm leading-5 text-text-muted">{rep?.body || 'No candidate summary available.'}</p>
+          {/* Details: collapsed by default */}
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onToggle(); }}
+            className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-sky-300/80 hover:text-sky-200"
+            aria-expanded={expanded}
+          >
+            <ChevronDown size={13} className={`transition-transform ${expanded ? 'rotate-180' : ''}`} />
+            {expanded ? 'Hide cluster details' : `How this cluster formed (${others.length} similar candidates)`}
+          </button>
+          {expanded && (
+            <div className="mt-3 space-y-2 rounded-xl border border-white/[0.08] bg-black/10 p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-text-subtle">Cluster members</p>
+              {others.map((member) => (
+                <div key={member.id} className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.03] px-2.5 py-2">
+                  <button type="button" onClick={() => onSelectMember(member)} className="min-w-0 flex-1 text-left">
+                    <p className="truncate text-xs font-medium text-text">{member.title || member.id}</p>
+                    <p className="truncate text-[11px] text-text-muted">{member.body?.slice(0, 110)}</p>
+                  </button>
+                  {cluster.similarities[member.id] !== undefined && (
+                    <span className="shrink-0 rounded-md border border-white/10 px-1.5 py-0.5 text-[10px] text-text-muted">
+                      {(cluster.similarities[member.id] * 100).toFixed(0)}%
+                    </span>
+                  )}
+                </div>
+              ))}
+              {others.length === 0 && <p className="text-[11px] text-text-subtle">Single candidate.</p>}
+              {rep?.jev_criteria_version && (
+                <p className="text-[10px] text-text-subtle">Jev criteria version: {rep.jev_criteria_version}</p>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          <InlineActionButton
+            variant="primary"
+            onClick={() => onApprove(rep || clusterToCandidate(cluster))}
+            disabled={isProcessing}
+            title="Approve cluster (promotes representative, marks others merged)"
+          >
+            <Check size={14} className={isProcessing ? 'animate-pulse' : ''} />
+          </InlineActionButton>
+          <InlineActionButton
+            variant="danger"
+            onClick={() => onReject(rep || clusterToCandidate(cluster))}
+            disabled={isProcessing}
+            title="Reject cluster"
+          >
+            <XCircle size={14} />
+          </InlineActionButton>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function clusterToCandidate(cluster: ClusterInfo): Candidate {
+  return {
+    id: cluster.representative,
+    title: cluster.representative_title,
+    status: 'pending_review',
+    body: `Cluster of ${cluster.member_ids.length} candidates: ${cluster.member_titles.join(' | ')}`,
+    cluster_id: cluster.cluster_id,
+  } as Candidate;
+}
+
+function AutoRejectedCard({
+  candidate,
+  onRestore,
+  onSelect,
+  restoring,
+}: {
+  candidate: Candidate;
+  onRestore: (candidate: Candidate) => void;
+  onSelect: () => void;
+  restoring: boolean;
+}) {
+  const conf = candidate.jev_confidence ? Number(candidate.jev_confidence) : confidenceValue(candidate);
+  return (
+    <div className="rounded-2xl border border-orange-400/20 bg-orange-400/[0.04] p-4">
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-orange-400/10 text-orange-300">
+          <Bot size={17} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="mb-1 flex flex-wrap items-center gap-2">
+            <span className="rounded-full border border-orange-400/25 bg-orange-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-orange-300">
+              Auto-rejected
+            </span>
+            {candidate.jev_choice && (
+              <span className={`text-[11px] ${jevTone(conf)}`}>
+                jev: {candidate.jev_choice}{conf !== null ? ` ${Math.round(conf * 100)}%` : ''}
+              </span>
+            )}
+            <span className="text-[11px] text-text-subtle">{formatDate(candidate.auto_rejected_at || candidate.created)}</span>
+          </div>
+          <button type="button" onClick={onSelect} className="w-full text-left">
+            <h3 className="truncate text-[15px] font-semibold text-text">{candidate.title || candidate.id}</h3>
+            <p className="mt-1 line-clamp-2 text-sm leading-5 text-text-muted">{candidate.body || 'No candidate summary available.'}</p>
+          </button>
+        </div>
+        <Button variant="secondary" disabled={restoring} onClick={() => onRestore(candidate)} title="Revert to pending review">
+          {restoring ? <Loader2 size={14} className="animate-spin" /> : <Undo2 size={14} />} Restore
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -265,6 +457,9 @@ export function CurateRoute() {
   const [token, setToken] = useState('');
   const [vaults, setVaults] = useState<VaultInfo[]>([]);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [clusters, setClusters] = useState<ClusterInfo[]>([]);
+  const [expandedClusters, setExpandedClusters] = useState<Set<string>>(new Set());
+  const [restoringId, setRestoringId] = useState<string | null>(null);
   const [selectedVault, setSelectedVault] = useState(searchParams.get('vault') || '');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
@@ -290,13 +485,20 @@ export function CurateRoute() {
       const candidatePath = selectedVault
         ? `/candidates?vault=${encodeURIComponent(selectedVault)}`
         : '/candidates';
-      const [candidateResult, vaultResult] = await Promise.allSettled([
+      const [candidateResult, vaultResult, clusterResult] = await Promise.allSettled([
         requestJSON<{ candidates: Candidate[]; vault?: string | null }>(candidatePath, token),
         requestJSON<{ vaults: VaultInfo[]; default_vault?: string | null }>('/candidates/vaults', token),
+        requestJSON<{ clusters: ClusterInfo[] }>(selectedVault ? `/candidates/clustered?vault=${encodeURIComponent(selectedVault)}` : '/candidates/clustered', token),
       ]);
       if (vaultResult.status === 'rejected') throw vaultResult.reason;
       const vaultPayload = vaultResult.value;
       setVaults(vaultPayload.vaults || []);
+      if (clusterResult.status === 'fulfilled') {
+        setClusters(clusterResult.value.clusters || []);
+      } else {
+        // clustering unavailable (older backend / pipeline down): flat list
+        setClusters([]);
+      }
       if (candidateResult.status === 'rejected') {
         setCandidates([]);
         throw candidateResult.reason;
@@ -361,6 +563,24 @@ export function CurateRoute() {
     }
   };
 
+  const performRestore = async (candidate: Candidate) => {
+    setRestoringId(candidate.id);
+    setError(null);
+    const vault = selectedVault || candidate.vault_id || '';
+    try {
+      await requestJSON('/candidates/restore', token, {
+        method: 'POST',
+        body: JSON.stringify({ id: candidate.id, vault }),
+      });
+      setNotice('Auto-reject reverted. The candidate is back in the review queue (and Jev learned it was wrong here).');
+      await load(true);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not restore candidate.');
+    } finally {
+      setRestoringId(null);
+    }
+  };
+
   useEffect(() => {
     if (!notice) return;
     const timer = window.setTimeout(() => setNotice(null), 4000);
@@ -385,7 +605,26 @@ export function CurateRoute() {
   const selectedCandidate = visibleCandidates.find((candidate) => candidate.id === selectedId)
     || candidates.find((candidate) => candidate.id === selectedId)
     || null;
-  const pendingCount = candidates.filter((candidate) => candidate.status === 'pending' || candidate.status === 'pending_review').length;
+  // Multi-member clusters only: singletons render as normal cards
+  const multiClusters = useMemo(
+    () => clusters.filter((cluster) => cluster.member_ids.length > 1),
+    [clusters],
+  );
+  const multiClusterIds = useMemo(
+    () => new Set(multiClusters.flatMap((cluster) => cluster.member_ids)),
+    [multiClusters],
+  );
+  const isInMultiCluster = useCallback(
+    (candidate: Candidate) => multiClusterIds.has(candidate.id),
+    [multiClusterIds],
+  );
+  const autoRejected = candidates.filter((candidate) => candidate.status === 'auto_rejected');
+  const autoRejectedList = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return autoRejected.filter((candidate: Candidate) => !normalizedQuery
+      || [candidate.title, candidate.body, candidate.id].some((value) => typeof value === 'string' && value.toLowerCase().includes(normalizedQuery)));
+  }, [autoRejected, query]);
+  const pendingCount = candidates.filter((candidate) => candidate.status === 'pending' || candidate.status === 'pending_review' || candidate.status === 'pre_approved').length;
   const approvedCount = candidates.filter((candidate: Candidate) => ['approved', 'promoted', 'applied', 'created', 'merged'].includes(candidate.status)).length;
   const averageConfidence = candidates.length
     ? candidates.reduce((sum, candidate) => sum + (confidenceValue(candidate) || 0), 0) / candidates.length
@@ -439,16 +678,68 @@ export function CurateRoute() {
 
         <section className="flex flex-col gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-3 sm:flex-row sm:items-center sm:p-4">
           <label className="relative min-w-0 flex-1"><Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-subtle" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, content, tags, or ID…" className="h-10 w-full rounded-xl border border-white/[0.08] bg-black/10 pl-9 pr-3 text-sm text-text outline-none placeholder:text-text-subtle focus:border-sky-400/40" /></label>
-          <div className="flex gap-2"><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as StatusFilter)} className="h-10 min-w-32 rounded-xl border border-white/[0.08] bg-surface px-3 text-sm text-text outline-none"><option value="all">All status</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="applied">Applied</option><option value="rejected">Rejected</option><option value="promoted">Promoted</option></select><select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)} className="h-10 min-w-32 rounded-xl border border-white/[0.08] bg-surface px-3 text-sm text-text outline-none"><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="confidence">Confidence</option></select></div>
+          <div className="flex gap-2"><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as StatusFilter)} className="h-10 min-w-32 rounded-xl border border-white/[0.08] bg-surface px-3 text-sm text-text outline-none"><option value="all">All status</option><option value="pending">Pending</option><option value="pre_approved">Pre-approved</option><option value="auto_rejected">Auto-rejected</option><option value="approved">Approved</option><option value="applied">Applied</option><option value="rejected">Rejected</option><option value="promoted">Promoted</option></select><select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)} className="h-10 min-w-32 rounded-xl border border-white/[0.08] bg-surface px-3 text-sm text-text outline-none"><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="confidence">Confidence</option></select></div>
         </section>
 
         {loading ? (
           <div className="flex min-h-64 items-center justify-center gap-2 text-sm text-text-muted"><Loader2 size={17} className="animate-spin" /> Loading candidate queue…</div>
         ) : (
+          <>
+          {statusFilter === 'auto_rejected' ? (
+            /* Auto-rejected audit section with revert */
+            <section className="flex min-w-0 flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-text">Auto-rejected by Jev</p>
+                  <p className="text-xs text-text-muted">Automatically filtered at confidence ≥80% with verdict "reject". Every revert is recorded and feeds the classifier feedback loop.</p>
+                </div>
+                <span className="rounded-full bg-orange-400/10 px-2.5 py-1 text-xs text-orange-300">{autoRejected.length} auto-rejected</span>
+              </div>
+              {autoRejectedList.length ? autoRejectedList.map((candidate) => (
+                <AutoRejectedCard
+                  key={`${candidate.id}:${candidate._filename ?? ''}`}
+                  candidate={candidate}
+                  onRestore={(c) => void performRestore(c)}
+                  onSelect={() => setSelectedId(candidate.id)}
+                  restoring={restoringId === candidate.id}
+                />
+              )) : (
+                <div className="rounded-2xl border border-dashed border-orange-400/20 px-5 py-10 text-center">
+                  <Bot size={28} className="mx-auto text-text-subtle" />
+                  <p className="mt-3 text-sm font-medium text-text">No auto-rejected candidates</p>
+                  <p className="mt-1 text-xs text-text-muted">The Jev gate has not filtered anything in this vault yet.</p>
+                </div>
+              )}
+            </section>
+          ) : (
           <section className="flex min-w-0 flex-col gap-3">
-            <div className="flex items-center justify-between"><div><p className="text-sm font-semibold text-text">Candidate queue</p><p className="text-xs text-text-muted">{visibleCandidates.length} of {candidates.length} candidates visible</p></div><span className="rounded-full bg-white/[0.06] px-2.5 py-1 text-xs text-text-muted">{statusFilter === 'all' ? 'All candidates' : statusLabel(statusFilter)}</span></div>
-            {visibleCandidates.length ? visibleCandidates.map((candidate) => <CandidateCard key={`${candidate.id}:${candidate._filename ?? ''}`} candidate={candidate} selected={candidate.id === selectedId} onSelect={() => setSelectedId(candidate.id)} onApprove={(c) => void performAction(c, 'approve')} onReject={(c) => { setRejecting(c); setRejectReason(''); }} actionId={actionId} />) : <div className="rounded-2xl border border-dashed border-white/10 px-5 py-12 text-center"><ClipboardCheck size={28} className="mx-auto text-text-subtle" /><p className="mt-3 text-sm font-medium text-text">No candidates match</p><p className="mt-1 text-xs text-text-muted">Try another status, vault, or search term.</p></div>}
+            <div className="flex items-center justify-between"><div><p className="text-sm font-semibold text-text">Candidate queue</p><p className="text-xs text-text-muted">{visibleCandidates.length} of {candidates.length} candidates visible{multiClusters.length ? ` · ${multiClusters.length} clusters` : ''}</p></div><span className="rounded-full bg-white/[0.06] px-2.5 py-1 text-xs text-text-muted">{statusFilter === 'all' ? 'All candidates' : statusLabel(statusFilter)}</span></div>
+            {/* Clustered pending candidates: one card per cluster */}
+            {multiClusters.map((cluster) => (
+              <ClusterCard
+                key={cluster.cluster_id}
+                cluster={cluster}
+                candidates={candidates}
+                expanded={expandedClusters.has(cluster.cluster_id)}
+                onToggle={() => setExpandedClusters((current) => {
+                  const next = new Set(current);
+                  if (next.has(cluster.cluster_id)) next.delete(cluster.cluster_id); else next.add(cluster.cluster_id);
+                  return next;
+                })}
+                onApprove={(c) => void performAction(c, 'approve')}
+                onReject={(c) => { setRejecting(c); setRejectReason(''); }}
+                onSelectMember={(member) => setSelectedId(member.id)}
+                actionId={actionId}
+              />
+            ))}
+            {/* Non-clustered candidates (flat list, as before) */}
+            {visibleCandidates
+              .filter((candidate) => !isInMultiCluster(candidate))
+              .map((candidate) => <CandidateCard key={`${candidate.id}:${candidate._filename ?? ''}`} candidate={candidate} selected={candidate.id === selectedId} onSelect={() => setSelectedId(candidate.id)} onApprove={(c) => void performAction(c, 'approve')} onReject={(c) => { setRejecting(c); setRejectReason(''); }} actionId={actionId} />)}
+            {!visibleCandidates.length && !multiClusters.length && <div className="rounded-2xl border border-dashed border-white/10 px-5 py-12 text-center"><ClipboardCheck size={28} className="mx-auto text-text-subtle" /><p className="mt-3 text-sm font-medium text-text">No candidates match</p><p className="mt-1 text-xs text-text-muted">Try another status, vault, or search term.</p></div>}
           </section>
+          )}
+          </>
         )}
       </div>
 
