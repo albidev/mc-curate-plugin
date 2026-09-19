@@ -198,6 +198,39 @@ Details are never opened automatically. A candidate modal appears only after an 
 - backdrop click;
 - `Close` action.
 
+### Clustering and the Jev gate (optional backend)
+
+The UI supports an optional curation pipeline provided by the
+[bdh-nightly-consolidation](https://github.com/albidev/bdh-nightly-consolidation)
+sidecar (`curate/curate_server.py`, commit `535c185`). **The plugin works fully
+without it** — every extended behavior degrades gracefully:
+
+| Backend capability | UI behavior when missing |
+|---|---|
+| `GET /api/local/candidates/clustered` | Endpoint failure is swallowed; all candidates render as individual cards (the pre-clustering layout). |
+| `status: pre_approved` on candidates | The filter option exists but the list is empty; pending cards render as before. |
+| `status: auto_rejected` | The "Auto-rejected" filter shows the documented empty state; the Restore button is only reachable from a populated section. |
+
+Conversely, when the sidecar pipeline is enabled the review queue upgrades to:
+
+- **Cluster cards** — similar pending candidates are grouped into one card
+  showing a representative, the mean similarity, and the Jev verdict with
+  color-coded confidence. A "How this cluster formed" details panel
+  (collapsed by default) lists each member with its per-member similarity
+  percentage and links to its full detail.
+- **Auto-rejected audit section** — candidates filtered automatically by the
+  Jev gate (confidence ≥ 80% with verdict `reject`) are listed with their
+  verdict, confidence, and timestamp. Each carries a **Restore** button that
+  returns the candidate to the review queue via
+  `POST /api/local/candidates/restore`; every restore is recorded in the
+  candidate frontmatter and feeds the classifier's feedback loop as a
+  negative label.
+
+The frontend contains no dependency on any external classifier service. It
+only reads optional frontmatter fields (`cluster_id`, `cluster_members`,
+`jev_choice`, `jev_confidence`, `jev_criteria_version`) that a backend
+without the pipeline never emits.
+
 ### Full note versus source evidence
 
 The UI intentionally distinguishes two layers:
