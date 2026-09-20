@@ -437,7 +437,17 @@ function CandidateCard({
           <p className="mt-1 line-clamp-2 text-sm leading-5 text-text-muted">{candidate.body || 'No candidate summary available.'}</p>
           <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-text-subtle">
             <span>{formatDate(candidate.created)}</span>
-            {confidenceLabel(candidate) && <span>extractor: {confidenceLabel(candidate)}</span>}
+            {confidenceLabel(candidate) && (
+              <span className={`rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${
+                (() => {
+                  const raw = String(candidate.confidence || '').toLowerCase().trim();
+                  if (raw === 'high') return 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300';
+                  if (raw === 'medium') return 'border-amber-400/25 bg-amber-400/10 text-amber-300';
+                  if (raw === 'low') return 'border-rose-400/25 bg-rose-400/10 text-rose-300';
+                  return 'border-white/10 bg-white/[0.04] text-text-muted';
+                })()
+              }`}>extractor: {confidenceLabel(candidate)}</span>
+            )}
             {candidate.jev_choice && (
               <span className={jevTone(candidate.jev_confidence ? Number(candidate.jev_confidence) : null)}>
                 jev: {candidate.jev_choice}{candidate.jev_confidence ? ` ${Math.round(Number(candidate.jev_confidence) * 100)}%` : ''}

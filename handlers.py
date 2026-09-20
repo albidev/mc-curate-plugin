@@ -127,6 +127,7 @@ def _normalize_session_synthesis_candidate(raw: Dict[str, Any]) -> Dict[str, Any
     if not isinstance(source_node_ids, list):
         source_node_ids = []
     source_node_ids = [str(node_id) for node_id in source_node_ids if node_id]
+    extra = raw.get("extra") if isinstance(raw.get("extra"), dict) else {}
     return _json_safe({
         "id": str(raw.get("candidate_id") or ""),
         "candidate_id": str(raw.get("candidate_id") or ""),
@@ -144,7 +145,14 @@ def _normalize_session_synthesis_candidate(raw: Dict[str, Any]) -> Dict[str, Any
         "sources": source_notes,
         "sourceNodeIds": source_node_ids,
         "provenance": provenance,
-        "extra": raw.get("extra") if isinstance(raw.get("extra"), dict) else {},
+        "extra": extra,
+        # Jev gate fields live in extra (schema-safe); surface them for the UI
+        "jev_choice": extra.get("jev_choice"),
+        "jev_confidence": extra.get("jev_confidence"),
+        "jev_criteria_version": extra.get("jev_criteria_version"),
+        "cluster_id": extra.get("cluster_id"),
+        "cluster_members": extra.get("cluster_members"),
+        "auto_rejected_at": extra.get("auto_rejected_at"),
     })
 
 

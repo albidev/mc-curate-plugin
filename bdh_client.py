@@ -134,7 +134,13 @@ def _safe_candidate(raw: dict[str, Any]) -> dict[str, Any]:
         "accepted_count": _safe_int(raw.get("accepted_count")),
         "context_only_count": _safe_int(raw.get("context_only_count")),
         "provenance": provenance_detail,
-        "extra": _safe_detail_map(raw.get("extra"), allowed={"activated_from", "slug"}),
+        "extra": _safe_detail_map(raw.get("extra"), allowed={
+            "activated_from", "slug",
+            # Jev gate fields (schema-safe, in extra since commit 535c185):
+            "jev_choice", "jev_confidence", "jev_criteria_version",
+            "cluster_id", "cluster_members", "auto_rejected_at",
+            "auto_reject_reverted_at", "revertable",
+        }),
         "safe_provenance": {
             "session_title": _safe_str(provenance.get("session_title")),
             "created_at": _safe_str(raw.get("created_at")),
