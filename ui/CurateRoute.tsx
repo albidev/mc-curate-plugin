@@ -216,6 +216,7 @@ function Button({
   onClick,
   type = 'button',
   title,
+  className = '',
 }: {
   children: React.ReactNode;
   variant?: 'primary' | 'secondary' | 'danger' | 'ghost';
@@ -223,6 +224,7 @@ function Button({
   onClick?: () => void;
   type?: 'button' | 'submit';
   title?: string;
+  className?: string;
 }) {
   const styles = {
     primary: 'border-emerald-400/30 bg-emerald-400/15 text-emerald-200 hover:bg-emerald-400/25',
@@ -237,7 +239,7 @@ function Button({
       disabled={disabled}
       onClick={onClick}
       title={title}
-      className={`inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border px-3 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${styles}`}
+      className={`inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border px-3 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${styles} ${className}`}
     >
       {children}
     </button>
@@ -722,12 +724,12 @@ export function CurateRoute() {
             <h1 className="text-2xl font-semibold tracking-tight text-text sm:text-3xl">Curate</h1>
             <p className="mt-1 max-w-2xl text-sm leading-6 text-text-muted">Review generated concepts before they become durable knowledge. Approvals enter quarantine first; nothing is silently promoted.</p>
           </div>
-          <div className="flex items-center gap-2">
-            <Button variant="secondary" onClick={() => void runCuratorReview()} disabled={curatorRunning} title="Lancia la curator review di Hermes sulle candidate pending (report su Discord)">
-              <Brain size={15} className={curatorRunning ? 'animate-pulse' : ''} /> {curatorRunning ? 'Review in corso…' : 'Curator review'}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="secondary" onClick={() => void runCuratorReview()} disabled={curatorRunning} title="Lancia la curator review di Hermes sulle candidate pending (report su Discord)" className="px-3 text-sm">
+              <Brain size={15} className={curatorRunning ? 'animate-pulse' : ''} /> <span className="hidden sm:inline">{curatorRunning ? 'Review in corso…' : 'Curator review'}</span><span className="sm:hidden">Review</span>
             </Button>
-            <Button variant="secondary" onClick={() => void runClassify()} disabled={classifying || refreshing} title="Esegue il Jev gate sulle candidate pending (idempotente, verdict-only)">
-              <Sparkles size={15} className={classifying ? 'animate-spin' : ''} /> {classifying ? 'Classifying…' : 'Run Jev gate'}
+            <Button variant="secondary" onClick={() => void runClassify()} disabled={classifying || refreshing} title="Esegue il Jev gate sulle candidate pending (idempotente, verdict-only)" className="px-3 text-sm">
+              <Sparkles size={15} className={classifying ? 'animate-spin' : ''} /> <span className="hidden sm:inline">{classifying ? 'Classifying…' : 'Run Jev gate'}</span><span className="sm:hidden">Gate</span>
             </Button>
             <Button variant="secondary" onClick={() => void load(true)} disabled={refreshing}>
               <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} /> Refresh
