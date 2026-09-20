@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import {
   Archive,
   Bot,
+  Brain,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -512,6 +513,7 @@ export function CurateRoute() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [classifying, setClassifying] = useState(false);
+  const [curatorRunning, setCuratorRunning] = useState(false);
 
   useEffect(() => {
     setToken(localStorage.getItem('mission-control-token') || '');
@@ -561,6 +563,19 @@ export function CurateRoute() {
       setRefreshing(false);
     }
   }, [selectedVault, token]);
+
+  const runCuratorReview = useCallback(async () => {
+    setCuratorRunning(true);
+    setError(null);
+    try {
+      await requestJSON('/cron/jobs/0192c100bbb4/run', token, { method: 'POST' });
+      setNotice('Curator review avviata: il verdetto arriva su Discord (job curate-curator-review).');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Impossibile avviare la curator review.');
+    } finally {
+      setCuratorRunning(false);
+    }
+  }, [token]);
 
   const runClassify = useCallback(async () => {
     setClassifying(true);
@@ -704,6 +719,9 @@ export function CurateRoute() {
             <p className="mt-1 max-w-2xl text-sm leading-6 text-text-muted">Review generated concepts before they become durable knowledge. Approvals enter quarantine first; nothing is silently promoted.</p>
           </div>
           <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={() => void runCuratorReview()} disabled={curatorRunning} title="Lancia la curator review di Hermes sulle candidate pending (report su Discord)">
+              <Brain size={15} className={curatorRunning ? 'animate-pulse' : ''} /> {curatorRunning ? 'Review in corso…' : 'Curator review'}
+            </Button>
             <Button variant="secondary" onClick={() => void runClassify()} disabled={classifying || refreshing} title="Esegue il Jev gate sulle candidate pending (idempotente, verdict-only)">
               <Sparkles size={15} className={classifying ? 'animate-spin' : ''} /> {classifying ? 'Classifying…' : 'Run Jev gate'}
             </Button>
