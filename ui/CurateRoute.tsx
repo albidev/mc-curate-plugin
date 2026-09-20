@@ -511,6 +511,7 @@ export function CurateRoute() {
   const [rejectReason, setRejectReason] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [classifying, setClassifying] = useState(false);
 
   useEffect(() => {
     setToken(localStorage.getItem('mission-control-token') || '');
@@ -560,6 +561,24 @@ export function CurateRoute() {
       setRefreshing(false);
     }
   }, [selectedVault, token]);
+
+  const runClassify = useCallback(async () => {
+    setClassifying(true);
+    setError(null);
+    try {
+      const result = await requestJSON<{ classified?: number; evaluated?: number; total?: number; skipped?: number; errors?: number }>(
+        '/candidates/classify', token, { method: 'POST' });
+      const n = result.classified ?? result.evaluated ?? result.total ?? 0;
+      setNotice(result.errors
+        ? `Gate eseguito: ${n} candidate classificate, ${result.errors} errori.`
+        : `Gate eseguito: ${n} candidate classificate dal Jev gate.`);
+      await load(true);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Classify non disponibile (sidecar offline?).');
+    } finally {
+      setClassifying(false);
+    }
+  }, [load, token]);
 
   useEffect(() => {
     if (token) void load();
@@ -684,9 +703,14 @@ export function CurateRoute() {
             <h1 className="text-2xl font-semibold tracking-tight text-text sm:text-3xl">Curate</h1>
             <p className="mt-1 max-w-2xl text-sm leading-6 text-text-muted">Review generated concepts before they become durable knowledge. Approvals enter quarantine first; nothing is silently promoted.</p>
           </div>
-          <Button variant="secondary" onClick={() => void load(true)} disabled={refreshing}>
-            <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} /> Refresh
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={() => void runClassify()} disabled={classifying || refreshing} title="Esegue il Jev gate sulle candidate pending (idempotente, verdict-only)">
+              <Sparkles size={15} className={classifying ? 'animate-spin' : ''} /> {classifying ? 'Classifying…' : 'Run Jev gate'}
+            </Button>
+            <Button variant="secondary" onClick={() => void load(true)} disabled={refreshing}>
+              <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} /> Refresh
+            </Button>
+          </div>
         </header>
 
         {error && <div className="flex items-start gap-3 rounded-2xl border border-rose-400/25 bg-rose-400/10 p-3 text-sm text-rose-200"><XCircle size={17} className="mt-0.5 shrink-0" /><span>{error}</span></div>}
