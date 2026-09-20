@@ -755,10 +755,11 @@ export function CurateRoute() {
         <section className="flex flex-col gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-3 sm:p-4">
           <div className="flex items-center justify-between gap-3"><div><p className="text-sm font-semibold text-text">Vaults</p><p className="text-xs text-text-muted">Choose the knowledge space to review.</p></div><span className="text-xs text-text-subtle">{currentVault?.mode || 'loading'}</span></div>
           <div className="flex gap-2 overflow-x-auto pb-1">
-            {vaults.map((vault) => (
-              <button key={vault.id} type="button" disabled={Boolean(vault.error) || vault.candidate_enabled === false || vault.mode === 'error'} onClick={() => chooseVault(vault.id)} className={`shrink-0 rounded-xl border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${selectedVault === vault.id ? 'border-sky-400/40 bg-sky-400/10 text-sky-200' : 'border-white/[0.08] bg-white/[0.025] text-text-muted hover:bg-white/[0.06]'}`} title={vault.error || (vault.candidate_enabled === false ? 'Vault unavailable' : undefined)}>
+            {vaults
+              .filter((vault: VaultInfo) => vault.candidate_enabled !== false && !vault.error && vault.mode !== 'error')
+              .map((vault) => (
+              <button key={vault.id} type="button" onClick={() => chooseVault(vault.id)} className={`shrink-0 rounded-xl border px-3 py-2 text-left transition-colors ${selectedVault === vault.id ? 'border-sky-400/40 bg-sky-400/10 text-sky-200' : 'border-white/[0.08] bg-white/[0.025] text-text-muted hover:bg-white/[0.06]'}`}>
                 <span className="block text-sm font-medium">{vault.label}</span><span className="mt-0.5 block text-[11px] text-current/70">{vault.candidate_count} total · {vault.pending_count} pending</span>
-                {(vault.error || vault.candidate_enabled === false || vault.mode === 'error') && <span className="mt-1 block max-w-56 text-[10px] text-rose-300">Unavailable{vault.error ? `: ${vault.error}` : ''}</span>}
               </button>
             ))}
           </div>
