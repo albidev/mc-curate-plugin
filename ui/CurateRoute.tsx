@@ -671,6 +671,10 @@ export function CurateRoute() {
         || [candidate.title, candidate.body, candidate.id].some((value) => typeof value === 'string' && value.toLowerCase().includes(normalizedQuery))
         || parseList(candidate.tags).some((value) => value.toLowerCase().includes(normalizedQuery)))
       .sort((a, b) => {
+        // pre-approved always first: it's the one-click confirm queue
+        const rank = (c: Candidate) => (c.status === 'pre_approved' ? 0 : 1);
+        const preDiff = rank(a) - rank(b);
+        if (preDiff !== 0) return preDiff;
         if (sortMode === 'confidence') return (confidenceValue(b) || 0) - (confidenceValue(a) || 0);
         const left = new Date(a.created || 0).getTime();
         const right = new Date(b.created || 0).getTime();
