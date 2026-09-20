@@ -97,7 +97,7 @@ interface VaultInfo {
   error?: string | null;
 }
 
-type StatusFilter = 'all' | 'pending' | 'approved' | 'applied' | 'rejected' | 'promoted' | 'auto_rejected';
+type StatusFilter = 'all' | 'pending' | 'in_vault' | 'rejected' | 'auto_rejected' | 'pre_approved';
 type SortMode = 'newest' | 'oldest' | 'confidence';
 
 interface ClusterInfo {
@@ -139,11 +139,20 @@ function statusLabel(status: string): string {
   return status.replaceAll('_', ' ');
 }
 
+// Terminal states 'applied' (BDH synthesis flow) and 'promoted' (legacy
+// vault-brain flow) mean the same thing: the note is in the vault.
+// Two pipelines, one outcome — displayed as one.
+const IN_VAULT_STATUSES = new Set(['applied', 'promoted', 'created', 'merged']);
+function displayStatus(status: string): string {
+  return IN_VAULT_STATUSES.has(status) ? 'in_vault' : status;
+}
+
 function statusTone(status: string): string {
-  if (status === 'pending' || status === 'pending_review' || status === 'pre_approved') return 'border-amber-400/25 bg-amber-400/10 text-amber-300';
-  if (status === 'approved' || status === 'promoted' || status === 'applied' || status === 'created' || status === 'merged') return 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300';
-  if (status === 'rejected') return 'border-rose-400/25 bg-rose-400/10 text-rose-300';
-  if (status === 'auto_rejected') return 'border-orange-400/25 bg-orange-400/10 text-orange-300';
+  const s = displayStatus(status);
+  if (s === 'pending' || s === 'pending_review' || s === 'pre_approved') return 'border-amber-400/25 bg-amber-400/10 text-amber-300';
+  if (s === 'in_vault' || s === 'approved') return 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300';
+  if (s === 'rejected') return 'border-rose-400/25 bg-rose-400/10 text-rose-300';
+  if (s === 'auto_rejected') return 'border-orange-400/25 bg-orange-400/10 text-orange-300';
   return 'border-white/10 bg-white/[0.04] text-text-muted';
 }
 
@@ -429,7 +438,7 @@ function CandidateCard({
         <div className="min-w-0 flex-1">
           <div className="mb-1 flex flex-wrap items-center gap-2">
             <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ${statusTone(candidate.status)}`}>
-              {statusLabel(candidate.status)}
+              {statusLabel(displayStatus(candidate.status))}
             </span>
             {candidate.type && <span className="text-[11px] uppercase tracking-[0.12em] text-text-subtle">{candidate.type}</span>}
           </div>
@@ -620,7 +629,10 @@ export function CurateRoute() {
   const visibleCandidates = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return candidates
-      .filter((candidate: Candidate) => statusFilter === 'all' || candidate.status === statusFilter || (statusFilter === 'pending' && candidate.status === 'pending_review'))
+      .filter((candidate: Candidate) => statusFilter === 'all'
+        || candidate.status === statusFilter
+        || (statusFilter === 'in_vault' && IN_VAULT_STATUSES.has(candidate.status))
+        || (statusFilter === 'pending' && candidate.status === 'pending_review'))
       .filter((candidate: Candidate) => !normalizedQuery
         || [candidate.title, candidate.body, candidate.id].some((value) => typeof value === 'string' && value.toLowerCase().includes(normalizedQuery))
         || parseList(candidate.tags).some((value) => value.toLowerCase().includes(normalizedQuery)))
@@ -708,7 +720,7 @@ export function CurateRoute() {
 
         <section className="flex flex-col gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-3 sm:flex-row sm:items-center sm:p-4">
           <label className="relative min-w-0 flex-1"><Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-subtle" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, content, tags, or ID…" className="h-10 w-full rounded-xl border border-white/[0.08] bg-black/10 pl-9 pr-3 text-sm text-text outline-none placeholder:text-text-subtle focus:border-sky-400/40" /></label>
-          <div className="flex gap-2"><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as StatusFilter)} className="h-10 min-w-32 rounded-xl border border-white/[0.08] bg-surface px-3 text-sm text-text outline-none"><option value="all">All status</option><option value="pending">Pending</option><option value="pre_approved">Pre-approved</option><option value="auto_rejected">Auto-rejected</option><option value="approved">Approved</option><option value="applied">Applied</option><option value="rejected">Rejected</option><option value="promoted">Promoted</option></select><select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)} className="h-10 min-w-32 rounded-xl border border-white/[0.08] bg-surface px-3 text-sm text-text outline-none"><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="confidence">Confidence</option></select></div>
+          <div className="flex gap-2"><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as StatusFilter)} className="h-10 min-w-32 rounded-xl border border-white/[0.08] bg-surface px-3 text-sm text-text outline-none"><option value="all">All status</option><option value="pending">Pending</option><option value="pre_approved">Pre-approved</option><option value="auto_rejected">Auto-rejected</option><option value="in_vault">In vault</option><option value="rejected">Rejected</option></select><select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)} className="h-10 min-w-32 rounded-xl border border-white/[0.08] bg-surface px-3 text-sm text-text outline-none"><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="confidence">Confidence</option></select></div>
         </section>
 
         {loading ? (
@@ -812,18 +824,15 @@ function CandidateDetail({
 {(candidate.status === 'pending_review' || candidate.status === 'pending' || candidate.status === 'pre_approved') ? (<>
 <Meta label="Jev verdict" value={candidate.jev_choice ? `${candidate.jev_choice} · ${candidate.jev_confidence ? Math.round(Number(candidate.jev_confidence) * 100) + '%' : ''}` : 'not classified yet'} />
 <Meta label="Pipeline" value="Awaiting your review" />
-</>) : candidate.status === 'promoted' ? (<>
-<Meta label="Promoted" value={formatDate(candidate.promoted_at)} />
-{candidate.approved_at && <Meta label="Approved" value={formatDate(candidate.approved_at)} />}
+</>) : IN_VAULT_STATUSES.has(candidate.status) ? (<>
+<Meta label="In vault" value={formatDate(candidate.promoted_at || candidate.created)} />
+<Meta label="Jev verdict" value={candidate.jev_choice ? `${candidate.jev_choice} · ${candidate.jev_confidence ? Math.round(Number(candidate.jev_confidence) * 100) + '%' : ''}` : candidate.status === 'applied' ? 'pre-gate era' : 'human decision'} />
 </>) : candidate.status === 'rejected' ? (<>
 <Meta label="Rejected" value={formatDate(candidate.rejected_at)} />
 <Meta label="Jev verdict" value={candidate.jev_choice ? candidate.jev_choice : 'human decision'} />
 </>) : candidate.status === 'auto_rejected' ? (<>
 <Meta label="Auto-rejected" value={formatDate(candidate.auto_rejected_at)} />
 <Meta label="Jev confidence" value={candidate.jev_confidence ? Math.round(Number(candidate.jev_confidence) * 100) + '%' : '—'} />
-</>) : candidate.status === 'applied' ? (<>
-<Meta label="Applied" value={formatDate(candidate.promoted_at || candidate.created)} />
-<Meta label="Jev verdict" value={candidate.jev_choice ? `${candidate.jev_choice} · ${candidate.jev_confidence ? Math.round(Number(candidate.jev_confidence) * 100) + '%' : ''}` : 'pre-gate era'} />
 </>) : (<>
 {candidate.approved_at && <Meta label="Approved" value={formatDate(candidate.approved_at)} />}
 {candidate.quarantine_until && <Meta label="Quarantine until" value={formatDate(candidate.quarantine_until)} />}
