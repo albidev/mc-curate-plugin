@@ -422,7 +422,7 @@ function CandidateCard({
 }) {
   const confidence = confidenceValue(candidate);
   const tags = parseList(candidate.tags);
-  const isPending = candidate.status === 'pending' || candidate.status === 'pending_review';
+  const isPending = candidate.status === 'pending' || candidate.status === 'pending_review' || candidate.status === 'pre_approved';
   const isProcessing = actionId === candidate.id;
 
   return (
@@ -862,7 +862,7 @@ function CandidateDetail({
   const tags = parseList(candidate.tags);
   const sources = parseList(candidate.sources);
   const sourceNodeIds = candidate.sourceNodeIds || [];
-  const isPending = candidate.status === 'pending' || candidate.status === 'pending_review';
+  const isPending = candidate.status === 'pending' || candidate.status === 'pending_review' || candidate.status === 'pre_approved';
   const fullBody = candidate.body?.trim() || candidate.description?.trim() || '';
 
   return <div className="flex max-h-[92vh] min-h-0 flex-col">
