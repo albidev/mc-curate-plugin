@@ -113,6 +113,15 @@ interface ClusterInfo {
 }
 
 const API_BASE = '/api/local';
+const CURATE_STATUS_ENDPOINT = '/curate/status';
+
+function notifyCurateStatusChanged(): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('mc:plugin-status-changed', {
+      detail: { endpoint: CURATE_STATUS_ENDPOINT },
+    }));
+  }
+}
 
 async function requestJSON<T>(path: string, token: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -556,6 +565,7 @@ export function CurateRoute() {
         || '';
       setCandidates(nextCandidates);
       if (!selectedVault && nextVault) setSelectedVault(nextVault);
+      notifyCurateStatusChanged();
       // Details are opt-in: never open a candidate automatically on load.
       setSelectedId(null);
     } catch (cause) {
