@@ -2,16 +2,27 @@
   "id": "curate",
   "name": "Curate",
   "description": "Nightly brain candidate approval queue",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "enabled": true,
   "routePath": "/curate",
   "navItem": {
     "to": "/curate",
     "label": "nav.curate",
     "icon": "ClipboardCheck",
-    "order": 60
+    "order": 60,
+    "indicator": {
+      "endpoint": "/curate/status",
+      "pollMs": 30000,
+      "tones": ["neutral", "info", "success", "warning", "error"]
+    }
   },
   "endpoints": [
+    {
+      "method": "GET",
+      "path": "/curate/status",
+      "handler": "curateStatus",
+      "authRequired": true
+    },
     {
       "method": "GET",
       "path": "/candidates",

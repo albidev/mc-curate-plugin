@@ -82,14 +82,19 @@ mc-curate-plugin/
   "id": "curate",
   "name": "Curate",
   "description": "Nightly brain candidate approval queue",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "enabled": true,
   "routePath": "/curate",
   "navItem": {
     "to": "/curate",
     "label": "nav.curate",
     "icon": "ClipboardCheck",
-    "order": 60
+    "order": 60,
+    "indicator": {
+      "endpoint": "/curate/status",
+      "pollMs": 30000,
+      "tones": ["neutral", "info", "success", "warning", "error"]
+    }
   },
   "endpoints": [
     { "method": "GET", "path": "/candidates", "handler": "listCandidates", "authRequired": true },
@@ -104,6 +109,7 @@ Backend endpoint paths are relative to `/api/local`:
 
 | Method | Plugin path | Full path | Purpose |
 |---|---|---|---|
+| GET | `/curate/status` | `/api/local/curate/status` | Generic sidebar indicator state; active when candidates await review |
 | GET | `/candidates` | `/api/local/candidates` | List candidates, optionally filtered by vault/status |
 | GET | `/candidates/vaults` | `/api/local/candidates/vaults` | List configured vaults and counts |
 | POST | `/candidates/approve` | `/api/local/candidates/approve` | Approve a candidate and start quarantine |

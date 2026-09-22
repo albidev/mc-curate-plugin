@@ -337,6 +337,31 @@ def list_vaults() -> List[Dict[str, Any]]:
     return out
 
 
+def curate_status() -> Dict[str, Any]:
+    """Return the generic sidebar indicator state for pending review work."""
+    try:
+        vaults = list_vaults()
+    except Exception:
+        # The host treats this optional indicator as best-effort. Do not make
+        # Curate navigation disappear because BDH is temporarily unavailable.
+        return {
+            "active": False,
+            "count": 0,
+            "pendingCount": 0,
+            "tone": "neutral",
+            "label": "Curate status unavailable",
+        }
+
+    pending_count = sum(int(vault.get("pending_count") or 0) for vault in vaults)
+    return {
+        "active": pending_count > 0,
+        "count": pending_count,
+        "pendingCount": pending_count,
+        "tone": "warning" if pending_count else "neutral",
+        "label": f"{pending_count} pending candidate{'s' if pending_count != 1 else ''}",
+    }
+
+
 def can_curate(vault: Optional[str] = None) -> bool:
     """Return whether approve/reject mutations are allowed for a vault."""
     vault_id = _validate_vault_id(vault)
