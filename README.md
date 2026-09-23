@@ -81,7 +81,7 @@ mc-curate-plugin/
 {
   "id": "curate",
   "name": "Curate",
-  "description": "Nightly brain candidate approval queue",
+  "description": "Review BDH session-synthesis and legacy candidate proposals",
   "version": "1.2.0",
   "enabled": true,
   "routePath": "/curate",
@@ -97,6 +97,7 @@ mc-curate-plugin/
     }
   },
   "endpoints": [
+    { "method": "GET", "path": "/curate/status", "handler": "curateStatus", "authRequired": true },
     { "method": "GET", "path": "/candidates", "handler": "listCandidates", "authRequired": true },
     { "method": "GET", "path": "/candidates/vaults", "handler": "listVaults", "authRequired": true },
     { "method": "POST", "path": "/candidates/approve", "handler": "approveCandidate", "authRequired": true },
@@ -112,7 +113,7 @@ Backend endpoint paths are relative to `/api/local`:
 | GET | `/curate/status` | `/api/local/curate/status` | Generic sidebar indicator state; active when candidates await review |
 | GET | `/candidates` | `/api/local/candidates` | List candidates, optionally filtered by vault/status |
 | GET | `/candidates/vaults` | `/api/local/candidates/vaults` | List configured vaults and counts |
-| POST | `/candidates/approve` | `/api/local/candidates/approve` | Approve a candidate and start quarantine |
+| POST | `/candidates/approve` | `/api/local/candidates/approve` | Approve: session-synthesis candidates apply immediately; legacy file candidates enter quarantine |
 | POST | `/candidates/reject` | `/api/local/candidates/reject` | Reject a candidate with human feedback |
 
 When `/candidates` is called without a `vault` query parameter, Curate asks
@@ -134,7 +135,7 @@ failure into an empty candidate list.
 
 ### Candidate response
 
-A candidate normally contains:
+A legacy file candidate normally contains:
 
 ```json
 {
@@ -164,7 +165,14 @@ A candidate normally contains:
 
 The plugin must never resolve arbitrary paths outside the configured vault root.
 
-### Candidate states
+### Approval semantics and candidate states
+
+Curate uses the same `/candidates/approve` action for two different candidate sources, and the backend branches by source:
+
+- **BDH `session_synthesis` candidates:** Curate records approval and immediately calls BDH `/api/synthesis/apply`. A successful apply creates a note, merges into an existing note, or returns `noop` if the information is already present. The note is written under the selected vault's configured `neurogenesis_dir`; this path does **not** use quarantine.
+- **Legacy file candidates:** Curate writes `status: approved` and `quarantine_until` to the candidate file. A separate promoter writes it to the target vault after quarantine. That promoter is currently retired, so this legacy path will remain quarantined until a promoter is enabled again.
+
+The following states describe the legacy file-candidate lifecycle:
 
 | State | Meaning |
 |---|---|
@@ -173,6 +181,8 @@ The plugin must never resolve arbitrary paths outside the configured vault root.
 | `rejected` | Human rejected; feedback is stored for future brain runs |
 | `promoted` | Quarantine elapsed and the candidate was written to the target vault |
 | `modified` | Candidate was edited before approval |
+
+For `session_synthesis`, apply outcomes are `created`, `merged`, `noop`, `conflict`, or `failed`; only `created` and `merged` write or update a vault note. The operation is bound to the candidate's `vault_id` and rejects a vault mismatch. Curate only exposes vaults configured as candidate-enabled; apply resolves the chosen vault's own root and `neurogenesis_dir`.
 
 Approval/rejection is vault-aware. A read-only or non-candidate vault cannot accept mutations.
 

@@ -24,6 +24,7 @@ import {
 import ReactMarkdown from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
+import { approvalNotice } from './approval-notice';
 
 function InlineActionButton({
   variant,
@@ -60,6 +61,8 @@ function InlineActionButton({
 interface Candidate {
   id: string;
   vault_id?: string;
+  source?: string;
+  synthesis_id?: string;
   type?: string;
   title?: string;
   status: string;
@@ -633,11 +636,13 @@ export function CurateRoute() {
     setError(null);
     const vault = selectedVault || candidate.vault_id || '';
     try {
-      await requestJSON(action === 'approve' ? '/candidates/approve' : '/candidates/reject', token, {
-        method: 'POST',
-        body: JSON.stringify({ id: candidate.id, vault, ...(reason ? { reason } : {}) }),
-      });
-      setNotice(action === 'approve' ? 'Candidate approved and moved to quarantine.' : 'Candidate rejected.');
+      const result = await requestJSON<{ success: boolean; candidate?: Candidate }>(
+        action === 'approve' ? '/candidates/approve' : '/candidates/reject', token, {
+          method: 'POST',
+          body: JSON.stringify({ id: candidate.id, vault, ...(reason ? { reason } : {}) }),
+        },
+      );
+      setNotice(action === 'approve' ? approvalNotice(result.candidate ?? candidate) : 'Candidate rejected.');
       setRejecting(null);
       setRejectReason('');
       await load(true);
@@ -729,10 +734,10 @@ export function CurateRoute() {
         <header className="flex flex-col gap-4 border-b border-white/[0.08] pb-5 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-300/80">
-              <Sparkles size={13} /> Nightly brain / review queue
+              <Sparkles size={13} /> Candidate review · synthesis + legacy
             </div>
             <h1 className="text-2xl font-semibold tracking-tight text-text sm:text-3xl">Curate</h1>
-            <p className="mt-1 max-w-2xl text-sm leading-6 text-text-muted">Review generated concepts before they become durable knowledge. Approvals enter quarantine first; nothing is silently promoted.</p>
+            <p className="mt-1 max-w-2xl text-sm leading-6 text-text-muted">Review generated concepts before they become durable knowledge. Session-synthesis approvals apply directly to the selected vault; legacy file candidates are quarantined, not yet in the vault.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="secondary" onClick={() => void runCuratorReview()} disabled={curatorRunning} title="Lancia la curator review di Hermes sulle candidate pending (report su Discord)" className="px-3 text-sm">

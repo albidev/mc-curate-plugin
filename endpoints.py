@@ -49,10 +49,8 @@ def listVaults(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any = N
     return {"vaults": vaults, "default_vault": default_vault}
 
 
-
-
 def curateStatus(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any = None) -> Dict[str, Any]:
-    """GET /api/local/curate/status — generic sidebar indicator state."""
+    """GET /api/local/curate/status — Curate sidebar indicator state."""
     return handlers.curate_status()
 
 

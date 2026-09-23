@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import handlers
 
 
@@ -44,3 +47,14 @@ def test_curate_status_degrades_when_backend_is_unavailable(monkeypatch):
     assert status["active"] is False
     assert status["count"] == 0
     assert status["label"] == "Curate status unavailable"
+
+
+def test_status_indicator_uses_namespaced_plugin_route():
+    manifest = json.loads(Path(__file__).with_name("manifest.json").read_text(encoding="utf-8"))
+    indicator_path = manifest["navItem"]["indicator"]["endpoint"]
+    status_endpoint = next(
+        endpoint for endpoint in manifest["endpoints"] if endpoint["handler"] == "curateStatus"
+    )
+
+    assert indicator_path == "/curate/status"
+    assert status_endpoint["path"] == indicator_path

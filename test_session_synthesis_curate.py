@@ -65,6 +65,17 @@ def test_vault_summary_counts_pending_review(monkeypatch):
     assert project_vault["pending_count"] == 1
 
 
+def test_vault_summary_counts_preapproved_candidates_as_pending(monkeypatch):
+    _install_proxy(monkeypatch)
+    monkeypatch.setitem(CANDIDATE, "status", "pre_approved")
+
+    project_vault = next(vault for vault in handlers.list_vaults() if vault["id"] == "projects-knowledge")
+
+    assert project_vault["candidate_count"] == 1
+    assert project_vault["pending_count"] == 1
+    assert project_vault["reviewed_count"] == 0
+
+
 def test_curate_approval_applies_bdh_candidate(monkeypatch):
     calls = []
 

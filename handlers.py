@@ -330,8 +330,8 @@ def list_vaults() -> List[Dict[str, Any]]:
             "read_only": not writable,
             "mode": mode,
             "candidate_count": len(candidates),
-            "pending_count": sum(1 for c in candidates if c.get("status") in {"pending", "pending_review"}),
-            "reviewed_count": sum(1 for c in candidates if c.get("status") not in {"pending", "pending_review"}),
+            "pending_count": sum(1 for c in candidates if c.get("status") in {"pending", "pending_review", "pre_approved"}),
+            "reviewed_count": sum(1 for c in candidates if c.get("status") not in {"pending", "pending_review", "pre_approved"}),
             "error": None,
         })
     return out

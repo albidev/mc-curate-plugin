@@ -2,7 +2,7 @@ import type { MCPluginManifest } from './types';
 export const curateManifest: MCPluginManifest = {
   id: 'curate',
   name: 'Curate',
-  description: 'Nightly brain candidate approval queue',
+  description: 'Review BDH session-synthesis and legacy candidate proposals',
   version: '1.2.0',
   enabled: true,
   navItem: {
