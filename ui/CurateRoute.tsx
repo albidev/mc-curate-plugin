@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Archive,
@@ -25,6 +25,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import { approvalNotice } from './approval-notice';
+import { paginateItems } from './pagination';
 
 function InlineActionButton({
   variant,
@@ -114,6 +115,12 @@ interface ClusterInfo {
   best_similarity: number | null;
   mean_similarity: number | null;
 }
+
+type CandidateQueueItem =
+  | { kind: 'cluster'; cluster: ClusterInfo }
+  | { kind: 'candidate'; candidate: Candidate };
+
+const PAGE_SIZE = 25;
 
 const API_BASE = '/api/local';
 const CURATE_STATUS_ENDPOINT = '/curate/status';
@@ -255,6 +262,55 @@ function Button({
     >
       {children}
     </button>
+  );
+}
+
+function PaginationControls({
+  page,
+  pageCount,
+  start,
+  end,
+  total,
+  itemLabel,
+  onPageChange,
+}: {
+  page: number;
+  pageCount: number;
+  start: number;
+  end: number;
+  total: number;
+  itemLabel: string;
+  onPageChange: (page: number) => void;
+}) {
+  if (pageCount < 2) return null;
+
+  return (
+    <div className="flex flex-col gap-3 border-t border-white/[0.08] pt-3 sm:flex-row sm:items-center sm:justify-between">
+      <p className="text-xs text-text-muted" aria-live="polite">
+        Showing {start}–{end} of {total} {itemLabel}
+      </p>
+      <nav aria-label="Candidate pagination" className="flex items-center justify-between gap-2 sm:justify-end">
+        <button
+          type="button"
+          onClick={() => onPageChange(page - 1)}
+          disabled={page <= 1}
+          aria-label="Previous page"
+          className="rounded-lg border border-white/10 px-3 py-2 text-xs font-medium text-text-muted transition-colors hover:bg-white/[0.06] hover:text-text disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Previous
+        </button>
+        <span className="min-w-20 text-center text-xs text-text-muted">Page {page} of {pageCount}</span>
+        <button
+          type="button"
+          onClick={() => onPageChange(page + 1)}
+          disabled={page >= pageCount}
+          aria-label="Next page"
+          className="rounded-lg border border-white/10 px-3 py-2 text-xs font-medium text-text-muted transition-colors hover:bg-white/[0.06] hover:text-text disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Next
+        </button>
+      </nav>
+    </div>
   );
 }
 
@@ -510,12 +566,15 @@ export function CurateRoute() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [token, setToken] = useState('');
   const [vaults, setVaults] = useState<VaultInfo[]>([]);
+  const queueSectionRef = useRef<HTMLElement | null>(null);
+  const autoRejectedSectionRef = useRef<HTMLElement | null>(null);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [clusters, setClusters] = useState<ClusterInfo[]>([]);
   const [expandedClusters, setExpandedClusters] = useState<Set<string>>(new Set());
   const [restoringId, setRestoringId] = useState<string | null>(null);
   const [selectedVault, setSelectedVault] = useState(searchParams.get('vault') || '');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [sortMode, setSortMode] = useState<SortMode>('newest');
   const [query, setQuery] = useState('');
@@ -625,10 +684,17 @@ export function CurateRoute() {
 
   const chooseVault = (vaultId: string) => {
     setSelectedVault(vaultId);
+    setCurrentPage(1);
     setSearchParams((current) => {
       current.set('vault', vaultId);
       return current;
     });
+  };
+
+  const changePage = (page: number) => {
+    setCurrentPage(page);
+    const section = statusFilter === 'auto_rejected' ? autoRejectedSectionRef.current : queueSectionRef.current;
+    section?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   const performAction = async (candidate: Candidate, action: 'approve' | 'reject', reason = '') => {
@@ -707,13 +773,49 @@ export function CurateRoute() {
     () => clusters.filter((cluster) => cluster.member_ids.length > 1),
     [clusters],
   );
-  const multiClusterIds = useMemo(
-    () => new Set(multiClusters.flatMap((cluster) => cluster.member_ids)),
-    [multiClusters],
-  );
-  const isInMultiCluster = useCallback(
-    (candidate: Candidate) => multiClusterIds.has(candidate.id),
-    [multiClusterIds],
+  const queueItems = useMemo<CandidateQueueItem[]>(() => {
+    const visibleById = new Map(visibleCandidates.map((candidate) => [candidate.id, candidate]));
+    const clusterByMember = new Map<string, ClusterInfo>();
+    for (const cluster of multiClusters) {
+      for (const memberId of cluster.member_ids) {
+        if (!clusterByMember.has(memberId)) clusterByMember.set(memberId, cluster);
+      }
+    }
+
+    const items: CandidateQueueItem[] = [];
+    const consumedIds = new Set<string>();
+    for (const candidate of visibleCandidates) {
+      if (consumedIds.has(candidate.id)) continue;
+      const cluster = clusterByMember.get(candidate.id);
+      if (cluster) {
+        const memberIds = [...new Set(cluster.member_ids.filter((id) => visibleById.has(id)))];
+        const members = memberIds
+          .map((id) => visibleById.get(id))
+          .filter((member): member is Candidate => Boolean(member));
+        if (members.length > 1) {
+          const representative = members.find((member) => member.id === cluster.representative) || members[0];
+          items.push({
+            kind: 'cluster',
+            cluster: {
+              ...cluster,
+              representative: representative.id,
+              representative_title: representative.title || representative.id,
+              member_ids: members.map((member) => member.id),
+              member_titles: members.map((member) => member.title || member.id),
+            },
+          });
+          for (const member of members) consumedIds.add(member.id);
+          continue;
+        }
+      }
+      items.push({ kind: 'candidate', candidate });
+      consumedIds.add(candidate.id);
+    }
+    return items;
+  }, [multiClusters, visibleCandidates]);
+  const queuePage = useMemo(
+    () => paginateItems(queueItems, currentPage, PAGE_SIZE),
+    [currentPage, queueItems],
   );
   const autoRejected = candidates.filter((candidate) => candidate.status === 'auto_rejected');
   const autoRejectedList = useMemo(() => {
@@ -721,6 +823,14 @@ export function CurateRoute() {
     return autoRejected.filter((candidate: Candidate) => !normalizedQuery
       || [candidate.title, candidate.body, candidate.id].some((value) => typeof value === 'string' && value.toLowerCase().includes(normalizedQuery)));
   }, [autoRejected, query]);
+  const autoRejectedPage = useMemo(
+    () => paginateItems(autoRejectedList, currentPage, PAGE_SIZE),
+    [autoRejectedList, currentPage],
+  );
+  useEffect(() => {
+    const clampedPage = statusFilter === 'auto_rejected' ? autoRejectedPage.page : queuePage.page;
+    if (currentPage !== clampedPage) setCurrentPage(clampedPage);
+  }, [autoRejectedPage.page, currentPage, queuePage.page, statusFilter]);
   const pendingCount = candidates.filter((candidate) => candidate.status === 'pending' || candidate.status === 'pending_review' || candidate.status === 'pre_approved').length;
   const approvedCount = candidates.filter((candidate: Candidate) => ['approved', 'promoted', 'applied', 'created', 'merged'].includes(candidate.status)).length;
   const averageConfidence = candidates.length
@@ -783,8 +893,38 @@ export function CurateRoute() {
         </section>
 
         <section className="flex flex-col gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-3 sm:flex-row sm:items-center sm:p-4">
-          <label className="relative min-w-0 flex-1"><Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-subtle" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, content, tags, or ID…" className="h-10 w-full rounded-xl border border-white/[0.08] bg-black/10 pl-9 pr-3 text-sm text-text outline-none placeholder:text-text-subtle focus:border-sky-400/40" /></label>
-          <div className="flex gap-2"><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as StatusFilter)} className="h-10 min-w-32 rounded-xl border border-white/[0.08] bg-surface px-3 text-sm text-text outline-none"><option value="all">All status</option><option value="pending">Pending</option><option value="pre_approved">Pre-approved</option><option value="auto_rejected">Auto-rejected</option><option value="in_vault">In vault</option><option value="rejected">Rejected</option></select><select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)} className="h-10 min-w-32 rounded-xl border border-white/[0.08] bg-surface px-3 text-sm text-text outline-none"><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="confidence">Confidence</option></select></div>
+          <label className="relative min-w-0 flex-1">
+            <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-subtle" />
+            <input
+              value={query}
+              onChange={(event) => { setQuery(event.target.value); setCurrentPage(1); }}
+              placeholder="Search title, content, tags, or ID…"
+              className="h-10 w-full rounded-xl border border-white/[0.08] bg-black/10 pl-9 pr-3 text-sm text-text outline-none placeholder:text-text-subtle focus:border-sky-400/40"
+            />
+          </label>
+          <div className="flex gap-2">
+            <select
+              value={statusFilter}
+              onChange={(event) => { setStatusFilter(event.target.value as StatusFilter); setCurrentPage(1); }}
+              className="h-10 min-w-32 rounded-xl border border-white/[0.08] bg-surface px-3 text-sm text-text outline-none"
+            >
+              <option value="all">All status</option>
+              <option value="pending">Pending</option>
+              <option value="pre_approved">Pre-approved</option>
+              <option value="auto_rejected">Auto-rejected</option>
+              <option value="in_vault">In vault</option>
+              <option value="rejected">Rejected</option>
+            </select>
+            <select
+              value={sortMode}
+              onChange={(event) => { setSortMode(event.target.value as SortMode); setCurrentPage(1); }}
+              className="h-10 min-w-32 rounded-xl border border-white/[0.08] bg-surface px-3 text-sm text-text outline-none"
+            >
+              <option value="newest">Newest</option>
+              <option value="oldest">Oldest</option>
+              <option value="confidence">Confidence</option>
+            </select>
+          </div>
         </section>
 
         {loading ? (
@@ -793,15 +933,17 @@ export function CurateRoute() {
           <>
           {statusFilter === 'auto_rejected' ? (
             /* Auto-rejected audit section with revert */
-            <section className="flex min-w-0 flex-col gap-3">
+            <section ref={autoRejectedSectionRef} className="flex min-w-0 flex-col gap-3">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-semibold text-text">Auto-rejected by Jev</p>
                   <p className="text-xs text-text-muted">Automatically filtered at confidence ≥80% with verdict "reject". Every revert is recorded and feeds the classifier feedback loop.</p>
                 </div>
-                <span className="rounded-full bg-orange-400/10 px-2.5 py-1 text-xs text-orange-300">{autoRejected.length} auto-rejected</span>
+                <span className="rounded-full bg-orange-400/10 px-2.5 py-1 text-xs text-orange-300">
+                  {autoRejectedList.length} matching · {autoRejected.length} total
+                </span>
               </div>
-              {autoRejectedList.length ? autoRejectedList.map((candidate) => (
+              {autoRejectedPage.items.length ? autoRejectedPage.items.map((candidate) => (
                 <AutoRejectedCard
                   key={`${candidate.id}:${candidate._filename ?? ''}`}
                   candidate={candidate}
@@ -812,37 +954,72 @@ export function CurateRoute() {
               )) : (
                 <div className="rounded-2xl border border-dashed border-orange-400/20 px-5 py-10 text-center">
                   <Bot size={28} className="mx-auto text-text-subtle" />
-                  <p className="mt-3 text-sm font-medium text-text">No auto-rejected candidates</p>
-                  <p className="mt-1 text-xs text-text-muted">The Jev gate has not filtered anything in this vault yet.</p>
+                  <p className="mt-3 text-sm font-medium text-text">
+                    {autoRejected.length ? 'No candidates match this search' : 'No auto-rejected candidates'}
+                  </p>
+                  <p className="mt-1 text-xs text-text-muted">
+                    {autoRejected.length ? 'Try another search term.' : 'The Jev gate has not filtered anything in this vault yet.'}
+                  </p>
                 </div>
               )}
+              <PaginationControls
+                page={autoRejectedPage.page}
+                pageCount={autoRejectedPage.pageCount}
+                start={autoRejectedPage.start}
+                end={autoRejectedPage.end}
+                total={autoRejectedPage.total}
+                itemLabel="candidates"
+                onPageChange={changePage}
+              />
             </section>
           ) : (
-          <section className="flex min-w-0 flex-col gap-3">
-            <div className="flex items-center justify-between"><div><p className="text-sm font-semibold text-text">Candidate queue</p><p className="text-xs text-text-muted">{visibleCandidates.length} of {candidates.length} candidates visible{multiClusters.length ? ` · ${multiClusters.length} clusters` : ''}</p></div><span className="rounded-full bg-white/[0.06] px-2.5 py-1 text-xs text-text-muted">{statusFilter === 'all' ? 'All candidates' : statusLabel(statusFilter)}</span></div>
-            {/* Clustered pending candidates: one card per cluster */}
-            {multiClusters.map((cluster) => (
+          <section ref={queueSectionRef} className="flex min-w-0 flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold text-text">Candidate queue</p>
+                <p className="text-xs text-text-muted">{visibleCandidates.length} candidates match · {queueItems.length} review cards</p>
+              </div>
+              <span className="rounded-full bg-white/[0.06] px-2.5 py-1 text-xs text-text-muted">
+                {statusFilter === 'all' ? 'All candidates' : statusLabel(statusFilter)}
+              </span>
+            </div>
+            {queuePage.items.map((item) => item.kind === 'cluster' ? (
               <ClusterCard
-                key={cluster.cluster_id}
-                cluster={cluster}
+                key={item.cluster.cluster_id}
+                cluster={item.cluster}
                 candidates={candidates}
-                expanded={expandedClusters.has(cluster.cluster_id)}
+                expanded={expandedClusters.has(item.cluster.cluster_id)}
                 onToggle={() => setExpandedClusters((current) => {
                   const next = new Set(current);
-                  if (next.has(cluster.cluster_id)) next.delete(cluster.cluster_id); else next.add(cluster.cluster_id);
+                  if (next.has(item.cluster.cluster_id)) next.delete(item.cluster.cluster_id); else next.add(item.cluster.cluster_id);
                   return next;
                 })}
-                onApprove={(c) => void performAction(c, 'approve')}
-                onReject={(c) => { setRejecting(c); setRejectReason(''); }}
+                onApprove={(candidate) => void performAction(candidate, 'approve')}
+                onReject={(candidate) => { setRejecting(candidate); setRejectReason(''); }}
                 onSelectMember={(member) => setSelectedId(member.id)}
                 actionId={actionId}
               />
+            ) : (
+              <CandidateCard
+                key={`${item.candidate.id}:${item.candidate._filename ?? ''}`}
+                candidate={item.candidate}
+                selected={item.candidate.id === selectedId}
+                onSelect={() => setSelectedId(item.candidate.id)}
+                onApprove={(candidate) => void performAction(candidate, 'approve')}
+                onReject={(candidate) => { setRejecting(candidate); setRejectReason(''); }}
+                actionId={actionId}
+              />
             ))}
-            {/* Non-clustered candidates (flat list, as before) */}
-            {visibleCandidates
-              .filter((candidate) => !isInMultiCluster(candidate))
-              .map((candidate) => <CandidateCard key={`${candidate.id}:${candidate._filename ?? ''}`} candidate={candidate} selected={candidate.id === selectedId} onSelect={() => setSelectedId(candidate.id)} onApprove={(c) => void performAction(c, 'approve')} onReject={(c) => { setRejecting(c); setRejectReason(''); }} actionId={actionId} />)}
-            {!visibleCandidates.length && !multiClusters.length && <div className="rounded-2xl border border-dashed border-white/10 px-5 py-12 text-center"><ClipboardCheck size={28} className="mx-auto text-text-subtle" /><p className="mt-3 text-sm font-medium text-text">No candidates match</p><p className="mt-1 text-xs text-text-muted">Try another status, vault, or search term.</p></div>}
+            {!queueItems.length && <div className="rounded-2xl border border-dashed border-white/10 px-5 py-12 text-center"><ClipboardCheck size={28} className="mx-auto text-text-subtle" /><p className="mt-3 text-sm font-medium text-text">No candidates match</p><p className="mt-1 text-xs text-text-muted">Try another status, vault, or search term.</p></div>}
+            <PaginationControls
+              page={queuePage.page}
+              pageCount={queuePage.pageCount}
+              start={queuePage.start}
+              end={queuePage.end}
+              total={queuePage.total}
+              itemLabel="cards"
+              onPageChange={changePage}
+            />
           </section>
           )}
           </>

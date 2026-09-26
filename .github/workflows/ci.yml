@@ -76,3 +76,16 @@ jobs:
             exit 1
           fi
           echo "no Mission Control internals imported"
+
+  ui-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Run plugin UI unit tests
+        run: node --experimental-strip-types --test test_approval_notice.test.mjs test_pagination.test.mjs

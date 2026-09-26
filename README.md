@@ -62,6 +62,7 @@ mc-curate-plugin/
 ├── handlers.py         # Candidate business logic and source enrichment
 ├── ui/
 │   ├── CurateRoute.tsx # Review queue, filters, modal, approve/reject UX
+│   ├── pagination.ts   # Client-side candidate queue pagination
 │   ├── attention.tsx   # Overview Attention contributor
 │   ├── manifest.ts     # Frontend manifest
 │   ├── route.ts        # Frontend route export
@@ -198,6 +199,7 @@ The UI provides:
 - summary cards for pending, approved/promoted, total, and confidence;
 - candidate search by title, body, tags, or ID;
 - status and sort filters;
+- paginated candidate queue and auto-rejected audit list (25 review cards/candidates per page);
 - compact candidate cards;
 - tap/click-only detail modal;
 - full candidate description when available;
@@ -328,6 +330,7 @@ Before pushing a plugin change:
 - `python3 -m py_compile handlers.py endpoints.py`;
 - verify candidate listing with an installed vault;
 - verify candidate listing with a missing/empty vault;
+- verify pagination on the final partial page, after filter/search/sort changes, and with clustered candidates;
 - verify `sourceNotes` resolves only notes inside the configured vault;
 - verify YAML dates, lists, multiline values, and legacy malformed candidates;
 - verify `sourceNotes` does not make the endpoint unreasonably slow;
