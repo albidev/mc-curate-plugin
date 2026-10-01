@@ -135,7 +135,7 @@ def _safe_candidate(raw: dict[str, Any]) -> dict[str, Any]:
         "context_only_count": _safe_int(raw.get("context_only_count")),
         "provenance": provenance_detail,
         "extra": _safe_detail_map(raw.get("extra"), allowed={
-            "activated_from", "slug",
+            "activated_from", "slug", "curator_merge_target", "curator_verdict", "curator_note",
             # Jev gate fields (schema-safe, in extra since commit 535c185):
             "jev_choice", "jev_confidence", "jev_criteria_version",
             "cluster_id", "cluster_members", "auto_rejected_at",
@@ -259,6 +259,39 @@ def apply_synthesis_candidate(
             "source": source,
         },
     )
+
+
+def _merge_request(path: str, *, method: str = "GET", payload=None):
+    try:
+        return _request(path, method=method, payload=payload)
+    except SynthesisProxyError as exc:
+        if exc.status_code == 404:
+            raise SynthesisProxyError(
+                "BDH merge endpoint or requested candidate/target is unavailable. "
+                "Verify the selection and that BDH supports directed merge; no fallback was applied.", 404
+            ) from exc
+        raise
+
+
+def load_merge_targets(candidate_id: str, vault_id: str, q: str = ""):
+    query = urllib.parse.urlencode({"candidate_id": candidate_id, "vault_id": vault_id, "q": q})
+    return _merge_request(f"/api/synthesis/merge-targets?{query}")
+
+
+def preview_synthesis_merge(candidate_id: str, vault_id: str, target_node_id: str):
+    return _merge_request("/api/synthesis/merge-preview", method="POST", payload={
+        "candidate_id": candidate_id, "vault_id": vault_id, "target_node_id": target_node_id,
+    })
+
+
+def merge_synthesis_candidate(*, candidate_id: str, synthesis_id: str, session_id: str,
+                              vault_id: str, source: str, target_node_id: str,
+                              candidate_revision: str, target_revision: str, confirmed: bool):
+    return _merge_request("/api/synthesis/merge", method="POST", payload={
+        "candidate_id": candidate_id, "synthesis_id": synthesis_id, "session_id": session_id,
+        "vault_id": vault_id, "source": source, "target_node_id": target_node_id,
+        "candidate_revision": candidate_revision, "target_revision": target_revision, "confirmed": confirmed,
+    })
 
 
 def revert_synthesis(operation_id: str, vault_id: str | None = None) -> dict[str, Any]:

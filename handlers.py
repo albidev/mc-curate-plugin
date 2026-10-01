@@ -146,6 +146,9 @@ def _normalize_session_synthesis_candidate(raw: Dict[str, Any]) -> Dict[str, Any
         "sourceNodeIds": source_node_ids,
         "provenance": provenance,
         "extra": extra,
+        "curator_merge_target": extra.get("curator_merge_target"),
+        "curator_verdict": extra.get("curator_verdict"),
+        "curator_note": extra.get("curator_note"),
         # Jev gate fields live in extra (schema-safe); surface them for the UI
         "jev_choice": extra.get("jev_choice"),
         "jev_confidence": extra.get("jev_confidence"),
@@ -774,6 +777,8 @@ def approve(cid: str, vault: Optional[str] = None, filename: Optional[str] = Non
             result["status"] = "applied"
             return _normalize_session_synthesis_candidate(result)
 
+        if (candidate.get("extra") or {}).get("curator_merge_target"):
+            raise CurateIntegrationError(409, "directed_merge_required", "Use Merge into… and confirm the target preview instead of automatic Approve.")
         correlation = {
             "candidate_id": candidate.get("candidate_id", ""),
             "synthesis_id": candidate.get("synthesis_id", ""),
@@ -1105,6 +1110,50 @@ def apply_synthesis_candidate(
         raise
     except Exception as exc:  # noqa: BLE001 - adapter exceptions vary by host version
         raise _bdh_error(exc) from exc
+
+
+def _merge_candidate(candidate_id: str, vault: str):
+    if not can_curate(vault):
+        raise CurateIntegrationError(403, "vault_not_curable", "Candidate mutations are disabled for this vault.")
+    candidate = get_synthesis_candidate(candidate_id, vault)
+    if candidate is None:
+        raise CurateIntegrationError(404, "not_found", "Candidate is missing or locally rejected in this vault.")
+    resolved = _resolve_candidate_vault(candidate, vault)
+    if candidate.get("source") != "session_synthesis":
+        raise CurateIntegrationError(409, "unsupported_source", "Only session synthesis candidates support directed merge.")
+    return candidate, resolved
+
+
+def list_merge_targets(candidate_id: str, vault: str, q: str = ""):
+    _, resolved = _merge_candidate(candidate_id, vault)
+    try:
+        return _require_bdh_client().load_merge_targets(candidate_id, resolved, q)
+    except Exception as exc:
+        raise _bdh_error(exc) from exc
+
+
+def preview_merge(candidate_id: str, vault: str, target_node_id: str):
+    _, resolved = _merge_candidate(candidate_id, vault)
+    try:
+        return _require_bdh_client().preview_synthesis_merge(candidate_id, resolved, target_node_id)
+    except Exception as exc:
+        raise _bdh_error(exc) from exc
+
+
+def merge_candidate(candidate_id: str, vault: str, target_node_id: str,
+                    candidate_revision: str, target_revision: str, confirmed: bool):
+    candidate, resolved = _merge_candidate(candidate_id, vault)
+    try:
+        result = _require_bdh_client().merge_synthesis_candidate(
+            candidate_id=candidate_id, synthesis_id=candidate["synthesis_id"],
+            session_id=candidate["session_id"], vault_id=resolved, source=candidate["source"],
+            target_node_id=target_node_id, candidate_revision=candidate_revision,
+            target_revision=target_revision, confirmed=confirmed)
+    except Exception as exc:
+        raise _bdh_error(exc) from exc
+    if result.get("status") not in {"merged", "noop"}:
+        raise CurateIntegrationError(502, "bdh_invalid_response", "BDH did not confirm a directed merge outcome.")
+    return result
 
 
 def revert_synthesis(operation_id: str, vault: Optional[str] = None) -> Dict[str, Any]:

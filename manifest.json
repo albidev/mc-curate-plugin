@@ -66,6 +66,24 @@
       "authRequired": true
     },
     {
+      "method": "GET",
+      "path": "/synthesis/merge-targets",
+      "handler": "listMergeTargets",
+      "authRequired": true
+    },
+    {
+      "method": "POST",
+      "path": "/synthesis/merge-preview",
+      "handler": "previewSynthesisMerge",
+      "authRequired": true
+    },
+    {
+      "method": "POST",
+      "path": "/synthesis/merge",
+      "handler": "mergeSynthesisCandidate",
+      "authRequired": true
+    },
+    {
       "method": "POST",
       "path": "/synthesis/reject",
       "handler": "rejectSynthesisCandidate",

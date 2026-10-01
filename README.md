@@ -116,6 +116,9 @@ Backend endpoint paths are relative to `/api/local`:
 | GET | `/candidates/vaults` | `/api/local/candidates/vaults` | List configured vaults and counts |
 | POST | `/candidates/approve` | `/api/local/candidates/approve` | Approve: session-synthesis candidates apply immediately; legacy file candidates enter quarantine |
 | POST | `/candidates/reject` | `/api/local/candidates/reject` | Reject a candidate with human feedback |
+| GET | `/synthesis/merge-targets` | `/api/local/synthesis/merge-targets` | Search writable notes in the candidate vault |
+| POST | `/synthesis/merge-preview` | `/api/local/synthesis/merge-preview` | Read-only target/evidence preview and revision hashes |
+| POST | `/synthesis/merge` | `/api/local/synthesis/merge` | Explicitly confirmed, revision-bound directed merge |
 
 When `/candidates` is called without a `vault` query parameter, Curate asks
 BDH to resolve its configured default vault and returns that resolved ID in the
@@ -187,6 +190,42 @@ For `session_synthesis`, apply outcomes are `created`, `merged`, `noop`, `confli
 
 Approval/rejection is vault-aware. A read-only or non-candidate vault cannot accept mutations.
 
+### Directed merge (human-confirmed)
+
+**Approve** retains automatic destination selection. **Merge into…** selects an
+existing note in the same vault and appends the candidate's evidence. **Reject**
+records feedback. Legacy file candidates retain their existing actions.
+
+Open a candidate, choose **Merge into…**, search/select a target note, inspect the
+existing content and evidence to append, then click **Confirm merge**. The same
+flow is available from the card's merge icon. A cluster merge applies only to its
+representative candidate, not every sibling.
+
+A candidate's `curator_merge_target` is a suggestion, never a writable browser
+path. BDH resolves it literally within the candidate's vault. Missing/ambiguous
+suggestions require an explicit selection; there is no fallback to creating a
+new note. The search returns at most 50 matches and tells the user to refine it
+when more exist.
+
+The plugin forwards `candidate_id`, `vault`, and `target_node_id`. Confirmation
+also sends `candidate_revision`, `target_revision`, and the literal boolean
+`confirmed: true`. The plugin obtains synthesis/session/source correlation from
+the stored candidate, ignoring browser-supplied replacements. BDH revalidates
+ownership, target safety, revisions and confirmation before writing.
+
+A targeted candidate cannot use automatic Approve: Curate opens the merge dialog,
+and the backend returns 409 to callers trying to bypass it. A successful merge
+closes the dialog and refreshes the queue. Stale preview errors keep the dialog
+open and require a fresh preview plus another human confirmation; duplicate
+clicks send one request. Cancel, Escape, searching and previewing never mutate.
+`noop` means evidence was already present and no note changed. Real merges carry
+a reversible operation ID and provenance in BDH's audit/journal.
+
+This feature requires matching merge endpoints in BDH. Older BDH installations
+return an error; Curate never replaces an unavailable merge with Approve/create.
+After an approved deployment, reload BDH and the MC telemetry plugin loader.
+Development verification must not restart either live service.
+
 ## UI contract
 
 ### Route
@@ -205,7 +244,7 @@ The UI provides:
 - full candidate description when available;
 - a clear metadata-only state when the candidate has no description;
 - source-note evidence with full bounded source content;
-- approve and reject actions for pending candidates;
+- Approve, Merge into… (session synthesis), and Reject actions for pending candidates;
 - reject feedback modal;
 - responsive desktop and mobile layout.
 
@@ -322,6 +361,45 @@ Expected plugin discovery includes:
   "version": "1.0.0"
 }
 ```
+
+### Isolated directed-merge verification
+
+Run the backend suite from the plugin root with a Python environment containing
+pytest and PyYAML:
+
+```bash
+python3 -m pytest -q --basetemp="${TMPDIR:?Set a scratch directory}/curate-tests"
+```
+
+`conftest.py` isolates `HERMES_HOME`, candidate configuration and vault paths, and
+disables live BDH/Curate-sidecar URLs. All temporary homes use the Hermes scratch
+cache (override with `CURATE_TEST_SCRATCH`). A temporary primary vault alone is
+not enough: legacy tests can otherwise load real configured candidate folders.
+
+The browser harness renders the actual `CurateRoute` and intercepts its API
+requests. With sibling MC dependencies installed, start an isolated Vite server:
+
+```bash
+node ../hermes-mission-control/node_modules/vite/bin/vite.js browser-harness \
+  --config browser-harness/vite.config.mjs
+```
+
+In another terminal, use a scratch Python venv with Playwright and Chromium:
+
+```bash
+python3 browser-harness/verify_merge_browser.py
+```
+
+`CURATE_MC_ROOT` overrides the host checkout. `CURATE_UI_TEST_URL` overrides the
+loopback harness URL. `CURATE_BROWSER_EXECUTABLE` selects a cached Chromium when
+its revision differs from the Playwright package. The checks cover rendered
+confirmation, cancel/Escape, missing hints/search, stale revisions, mobile detail
+and duplicate clicks. No production API is called.
+
+BDH's `tests/test_curate_directed_merge_integration.py` uses MC's real manifest
+loader, real HTTP adapters, and temporary BDH vaults to verify the complete
+backend path, including audit, idempotency and revert. Build MC with a scratch
+`--outDir` rather than overwriting a serving `dist/`.
 
 ## Testing checklist
 

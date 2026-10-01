@@ -11,6 +11,7 @@ import {
   ClipboardCheck,
   Clock3,
   Inbox,
+  GitMerge,
   Layers,
   Loader2,
   RefreshCw,
@@ -26,6 +27,7 @@ import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import { approvalNotice } from './approval-notice';
 import { paginateItems } from './pagination';
+import { MergeDialog, type MergeResult } from './merge-dialog';
 
 function InlineActionButton({
   variant,
@@ -64,6 +66,9 @@ interface Candidate {
   vault_id?: string;
   source?: string;
   synthesis_id?: string;
+  curator_merge_target?: string;
+  curator_verdict?: string;
+  curator_note?: string;
   type?: string;
   title?: string;
   status: string;
@@ -321,6 +326,7 @@ function ClusterCard({
   onToggle,
   onApprove,
   onReject,
+  onMerge,
   onSelectMember,
   actionId,
 }: {
@@ -331,6 +337,7 @@ function ClusterCard({
   onApprove: (candidate: Candidate) => void;
   onReject: (candidate: Candidate) => void;
   onSelectMember: (candidate: Candidate) => void;
+  onMerge: (candidate: Candidate) => void;
   actionId: string | null;
 }) {
   const rep = candidates.find((c) => c.id === cluster.representative);
@@ -398,6 +405,7 @@ function ClusterCard({
           )}
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          {rep?.source === 'session_synthesis' && ['pending_review', 'pre_approved'].includes(rep.status) && <InlineActionButton variant="ghost" title="Merge representative into existing note (only this candidate)" disabled={!!actionId} onClick={() => onMerge(rep)}><GitMerge size={14}/></InlineActionButton>}
           <InlineActionButton
             variant="primary"
             onClick={() => onApprove(rep || clusterToCandidate(cluster))}
@@ -479,6 +487,7 @@ function CandidateCard({
   onSelect,
   onApprove,
   onReject,
+  onMerge,
   actionId,
 }: {
   candidate: Candidate;
@@ -486,6 +495,7 @@ function CandidateCard({
   onSelect: () => void;
   onApprove: (candidate: Candidate) => void;
   onReject: (candidate: Candidate) => void;
+  onMerge: (candidate: Candidate) => void;
   actionId: string | null;
 }) {
   const confidence = confidenceValue(candidate);
@@ -538,6 +548,7 @@ function CandidateCard({
         </div>
         {isPending && (
           <div className="flex items-center gap-1.5 ml-auto shrink-0">
+            {candidate.source === 'session_synthesis' && <InlineActionButton variant="ghost" title="Merge into existing note" disabled={!!actionId} onClick={e => { e.stopPropagation(); onMerge(candidate); }}><GitMerge size={14}/></InlineActionButton>}
             <InlineActionButton
               variant="primary"
               onClick={(e) => { e.stopPropagation(); onApprove(candidate); }}
@@ -582,6 +593,8 @@ export function CurateRoute() {
   const [actionId, setActionId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [rejecting, setRejecting] = useState<Candidate | null>(null);
+  const [merging, setMerging] = useState<(Candidate & {vault_id: string}) | null>(null);
+  const mergeRequest = useCallback(<T,>(path: string, init?: RequestInit) => requestJSON<T>(path, token, init), [token]);
   const [rejectReason, setRejectReason] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -683,6 +696,8 @@ export function CurateRoute() {
   }, [selectedId]);
 
   const chooseVault = (vaultId: string) => {
+    setMerging(null);
+    setSelectedId(null);
     setSelectedVault(vaultId);
     setCurrentPage(1);
     setSearchParams((current) => {
@@ -697,7 +712,25 @@ export function CurateRoute() {
     section?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
+  const openMerge = (candidate: Candidate) => {
+    if (actionId || restoringId || classifying) return;
+    const vault = candidate.vault_id || selectedVault;
+    if (!vault || candidate.source !== 'session_synthesis' || !['pending_review', 'pre_approved'].includes(candidate.status)) return;
+    if (vaults.find(v => v.id === vault)?.writable === false) return;
+    setSelectedId(null);
+    setMerging({...candidate, vault_id: vault});
+  };
+
+  const mergedSuccessfully = (result: MergeResult) => {
+    setNotice(result.status === 'noop' ? `Evidence already present in ${result.note_path}; no note changed.` : `Merged into ${result.note_path}.`);
+    setMerging(null);
+    notifyCurateStatusChanged();
+    void load(true);
+  };
+
   const performAction = async (candidate: Candidate, action: 'approve' | 'reject', reason = '') => {
+    if (actionId || merging) return;
+    if (action === 'approve' && candidate.source === 'session_synthesis' && candidate.curator_merge_target) { openMerge(candidate); return; }
     setActionId(candidate.id);
     setError(null);
     const vault = selectedVault || candidate.vault_id || '';
@@ -995,6 +1028,7 @@ export function CurateRoute() {
                   return next;
                 })}
                 onApprove={(candidate) => void performAction(candidate, 'approve')}
+                onMerge={openMerge}
                 onReject={(candidate) => { setRejecting(candidate); setRejectReason(''); }}
                 onSelectMember={(member) => setSelectedId(member.id)}
                 actionId={actionId}
@@ -1006,6 +1040,7 @@ export function CurateRoute() {
                 selected={item.candidate.id === selectedId}
                 onSelect={() => setSelectedId(item.candidate.id)}
                 onApprove={(candidate) => void performAction(candidate, 'approve')}
+                onMerge={openMerge}
                 onReject={(candidate) => { setRejecting(candidate); setRejectReason(''); }}
                 actionId={actionId}
               />
@@ -1028,9 +1063,11 @@ export function CurateRoute() {
 
       {selectedCandidate && <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/65 p-0 sm:items-center sm:p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedId(null); }}>
         <div role="dialog" aria-modal="true" aria-labelledby="curate-candidate-title" className="max-h-[92vh] w-full overflow-hidden rounded-t-3xl border border-white/10 bg-surface shadow-2xl sm:max-w-3xl sm:rounded-3xl">
-          <CandidateDetail candidate={selectedCandidate} actionId={actionId} onClose={() => setSelectedId(null)} onApprove={(candidate) => void performAction(candidate, 'approve')} onReject={(candidate) => { setRejecting(candidate); setRejectReason(''); }} />
+          <CandidateDetail candidate={selectedCandidate} actionId={actionId} onMerge={openMerge} onClose={() => setSelectedId(null)} onApprove={(candidate) => void performAction(candidate, 'approve')} onReject={(candidate) => { setRejecting(candidate); setRejectReason(''); }} />
         </div>
       </div>}
+
+      {merging && <MergeDialog key={`${merging.vault_id}:${merging.id}`} candidate={merging} request={mergeRequest} onCancel={() => setMerging(null)} onSuccess={mergedSuccessfully}/>}
 
       {rejecting && <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 sm:items-center"><form onSubmit={(event) => { event.preventDefault(); void performAction(rejecting, 'reject', rejectReason.trim()); }} className="w-full max-w-lg rounded-2xl border border-white/10 bg-surface p-5 shadow-2xl"><div className="flex items-start justify-between gap-4"><div><p className="text-base font-semibold text-text">Reject candidate</p><p className="mt-1 text-sm text-text-muted">Give the nightly brain useful feedback for the next run.</p></div><button type="button" onClick={() => setRejecting(null)} className="rounded-lg p-1 text-text-muted hover:bg-white/[0.06] hover:text-text"><X size={18} /></button></div><textarea autoFocus value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} placeholder="Why should this candidate be rejected?" className="mt-4 min-h-28 w-full resize-y rounded-xl border border-white/10 bg-black/10 p-3 text-sm text-text outline-none placeholder:text-text-subtle focus:border-rose-400/40" /><div className="mt-4 flex justify-end gap-2"><Button variant="ghost" onClick={() => setRejecting(null)}>Cancel</Button><Button type="submit" variant="danger" disabled={!rejectReason.trim() || actionId === rejecting.id}>{actionId === rejecting.id && <Loader2 size={15} className="animate-spin" />} Reject candidate</Button></div></form></div>}
     </div>
@@ -1043,12 +1080,14 @@ function CandidateDetail({
   onClose,
   onApprove,
   onReject,
+  onMerge,
 }: {
   candidate: Candidate;
   actionId: string | null;
   onClose: () => void;
   onApprove: (candidate: Candidate) => void;
   onReject: (candidate: Candidate) => void;
+  onMerge?: (candidate: Candidate) => void;
 }) {
   const confidence = confidenceValue(candidate);
   const tags = parseList(candidate.tags);
@@ -1079,7 +1118,7 @@ function CandidateDetail({
 {candidate.quarantine_until && <Meta label="Quarantine until" value={formatDate(candidate.quarantine_until)} />}
 </>)}
 </div><div className="mt-5"><p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-subtle">Candidate body</p>{fullBody ? <article className="max-h-[32vh] overflow-y-auto rounded-xl border border-white/[0.08] bg-black/10 p-3"><CandidateMarkdown content={fullBody} /></article> : <div className="rounded-xl border border-dashed border-amber-400/25 bg-amber-400/[0.06] p-3 text-sm leading-6 text-amber-100/80">This candidate contains metadata only. The semantic description is available in the source notes below.</div>}</div>{candidate.sourceNotes?.length ? <div className="mt-5"><p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-subtle">Evidence from source notes</p><div className="space-y-3">{candidate.sourceNotes.map((note) => <section key={note.source} className="rounded-xl border border-white/[0.08] bg-black/10 p-3"><div className="flex items-center justify-between gap-3"><p className="text-sm font-medium text-text">{note.title}</p><span className={`text-[10px] uppercase tracking-[0.12em] ${note.match_type === 'related' ? 'text-amber-300' : note.found ? 'text-emerald-300' : 'text-text-subtle'}`}>{note.match_type === 'related' ? 'related' : note.found ? 'found' : 'missing'}</span></div>{note.found && <p className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap text-xs leading-5 text-text-muted">{note.body}</p>}</section>)}</div></div> : null}{sourceNodeIds.length > 0 && <div className="mt-5"><div className="mb-2"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-subtle">Source nodes ({sourceNodeIds.length})</p><p className="mt-1 text-xs leading-5 text-text-muted">BDH graph nodes activated as evidence/context for this synthesis. They are not notes created by the candidate; older nodes are expected.</p></div><div className="space-y-1.5">{sourceNodeIds.map((nodeId) => <code key={nodeId} title={nodeId} className="block break-all rounded-lg border border-sky-400/15 bg-sky-400/[0.06] px-2.5 py-2 text-[11px] leading-5 text-sky-200">{nodeId}</code>)}</div></div>}{tags.length > 0 && <DetailList label="Tags" items={tags} tone="sky" />}{sources.length > 0 && <DetailList label="Source notes (summary)" items={sources} tone="neutral" />}{candidate.rejection_reason && <div className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 p-3"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-rose-300">Rejection feedback</p><p className="mt-2 text-sm leading-5 text-rose-100/80">{candidate.rejection_reason}</p></div>}</div>
-    <div className="flex justify-end gap-2 border-t border-white/[0.08] p-4"><Button variant="ghost" onClick={onClose}>Close</Button>{isPending && <><Button variant="danger" onClick={() => onReject(candidate)} disabled={actionId === candidate.id}><XCircle size={15} /> Reject</Button><Button variant="primary" onClick={() => onApprove(candidate)} disabled={actionId === candidate.id}>{actionId === candidate.id ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} Approve candidate</Button></>}</div>
+    <div className="flex justify-end gap-2 border-t border-white/[0.08] p-4"><Button variant="ghost" onClick={onClose}>Close</Button>{onMerge && isPending && candidate.source === 'session_synthesis' && <Button variant="secondary" disabled={!!actionId} onClick={() => onMerge(candidate)} title="Merge candidate into existing vault note"><GitMerge size={15}/> Merge into…</Button>}{isPending && <><Button variant="danger" onClick={() => onReject(candidate)} disabled={actionId === candidate.id}><XCircle size={15} /> Reject</Button><Button variant="primary" onClick={() => onApprove(candidate)} disabled={actionId === candidate.id}>{actionId === candidate.id ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} Approve candidate</Button></>}</div>
   </div>;
 }
 

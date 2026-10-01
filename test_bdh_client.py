@@ -13,6 +13,7 @@ from bdh_client import (  # noqa: E402
     approve_synthesis_candidate,
     get_synthesis_candidate,
     load_synthesis_activity,
+    _bdh_base_url,
     load_synthesis_candidates,
     revert_synthesis,
 )
@@ -53,7 +54,7 @@ class SynthesisActivityProxyTests(unittest.TestCase):
         self.assertEqual(result["vault_id"], self.vault)
         self.assertEqual(
             seen,
-            [(f"http://127.0.0.1:8643/api/synthesis-activity?vault_id={self.vault}", "GET", 8)],
+            [(f"{_bdh_base_url()}/api/synthesis-activity?vault_id={self.vault}", "GET", 8)],
         )
 
     def test_revert_refreshes_graph_after_success(self):

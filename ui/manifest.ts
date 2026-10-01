@@ -24,6 +24,9 @@ export const curateManifest: MCPluginManifest = {
     { method: 'GET', path: '/candidates', handler: 'listCandidates' },
     { method: 'GET', path: '/candidates/vaults', handler: 'listVaults' },
     { method: 'POST', path: '/candidates/approve', handler: 'approveCandidate' },
+    { method: 'GET', path: '/synthesis/merge-targets', handler: 'listMergeTargets', authRequired: true },
+    { method: 'POST', path: '/synthesis/merge-preview', handler: 'previewSynthesisMerge', authRequired: true },
+    { method: 'POST', path: '/synthesis/merge', handler: 'mergeSynthesisCandidate', authRequired: true },
     { method: 'POST', path: '/candidates/reject', handler: 'rejectCandidate' },
   ],
 };

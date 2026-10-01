@@ -251,6 +251,39 @@ def restoreAutoRejectedCandidate(body: Dict[str, Any], params: Dict[str, List[st
     return result
 
 
+def _merge_field(body, key, pattern=None):
+    import re
+    value = body.get(key)
+    if not isinstance(value, str) or not value or value != value.strip() or (pattern and not re.fullmatch(pattern, value)):
+        raise PluginError(400, "bad_request", f"Invalid or missing {key}.")
+    return value
+
+
+def _merge_identity(body):
+    return (_merge_field(body, "candidate_id", r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}"),
+            _merge_field(body, "vault", r"[A-Za-z0-9_-]+"))
+
+
+def listMergeTargets(body, params, auth=None):
+    data = {key: value[0] for key, value in params.items() if value}
+    cid, vault = _merge_identity(data)
+    return handlers.list_merge_targets(cid, vault, data.get("q", ""))
+
+
+def previewSynthesisMerge(body, params, auth=None):
+    cid, vault = _merge_identity(body)
+    return handlers.preview_merge(cid, vault, _merge_field(body, "target_node_id"))
+
+
+def mergeSynthesisCandidate(body, params, auth=None):
+    cid, vault = _merge_identity(body)
+    if body.get("confirmed") is not True:
+        raise PluginError(400, "confirmation_required", "Explicit confirmed:true is required.")
+    return handlers.merge_candidate(cid, vault, _merge_field(body, "target_node_id"),
+        _merge_field(body, "candidate_revision", r"[0-9a-f]{64}"),
+        _merge_field(body, "target_revision", r"[0-9a-f]{64}"), True)
+
+
 def classifyPendingCandidates(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any = None) -> Dict[str, Any]:
     """POST /api/local/candidates/classify — run the Jev gate (idempotent)."""
     vault = str(body.get("vault") or "").strip() or None
