@@ -150,6 +150,9 @@ def _merge_preview(vault: str, cid: str) -> Dict[str, Any]:
     target = preview.get("target") or {}
     if target.get("node_id") != node or (preview.get("candidate") or {}).get("candidate_id") != cid:
         return {"blocked": "BDH returned a preview for a different candidate or note."}
+    if (preview.get("conflict") or {}).get("required"):
+        return {"blocked": "Possible conflicting evidence: open this candidate and reconcile it individually before merging.",
+                "blocked_code": "reconciliation_required"}
     return {"merge": {
         "target_node_id": node, "title": str(target.get("title") or ""), "note_path": str(target.get("note_path") or ""),
         "target_excerpt": _body_excerpt(str(target.get("content") or "")),

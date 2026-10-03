@@ -3,7 +3,7 @@ export const curateManifest: MCPluginManifest = {
   id: 'curate',
   name: 'Curate',
   description: 'Review BDH session-synthesis and legacy candidate proposals',
-  version: '1.4.2',
+  version: '1.5.0',
   enabled: true,
   navItem: {
     to: '/curate',
@@ -27,6 +27,8 @@ export const curateManifest: MCPluginManifest = {
     { method: 'GET', path: '/synthesis/merge-targets', handler: 'listMergeTargets', authRequired: true },
     { method: 'POST', path: '/synthesis/merge-preview', handler: 'previewSynthesisMerge', authRequired: true },
     { method: 'POST', path: '/synthesis/merge', handler: 'mergeSynthesisCandidate', authRequired: true },
+    { method: 'POST', path: '/synthesis/reconcile', handler: 'startReconciliation', authRequired: true },
+    { method: 'GET', path: '/synthesis/reconcile/status', handler: 'reconciliationStatus', authRequired: true },
     { method: 'POST', path: '/candidates/reject', handler: 'rejectCandidate' },
   ],
 };

@@ -280,9 +280,25 @@ def mergeSynthesisCandidate(body, params, auth=None):
     cid, vault = _merge_identity(body)
     if body.get("confirmed") is not True:
         raise PluginError(400, "confirmation_required", "Explicit confirmed:true is required.")
+    reconciliation = {}
+    if "reconciliation_id" in body or "conflict_confirmed" in body:
+        if body.get("conflict_confirmed") is not True:
+            raise PluginError(400, "conflict_confirmation_required", "Explicit conflict_confirmed:true is required.")
+        reconciliation = {"reconciliation_id": _merge_field(body, "reconciliation_id", r"rec-[0-9a-f]{32}"),
+                          "conflict_confirmed": True}
     return handlers.merge_candidate(cid, vault, _merge_field(body, "target_node_id"),
         _merge_field(body, "candidate_revision", r"[0-9a-f]{64}"),
-        _merge_field(body, "target_revision", r"[0-9a-f]{64}"), True)
+        _merge_field(body, "target_revision", r"[0-9a-f]{64}"), True, **reconciliation)
+
+
+def startReconciliation(body, params, auth=None):
+    import reconcile_jobs
+    return reconcile_jobs.start(body)
+
+
+def reconciliationStatus(body, params, auth=None):
+    import reconcile_jobs
+    return reconcile_jobs.status((params.get("job") or [""])[0])
 
 
 def classifyPendingCandidates(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any = None) -> Dict[str, Any]:

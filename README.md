@@ -27,7 +27,7 @@ Curate is installed as an external plugin by cloning this repository into the He
 | [Hermes Mission Control](https://github.com/albidev/hermes-mission-control) | everything | Hosts the UI and runs the plugin backend inside its telemetry service. That Python environment needs PyYAML (it reads `curate-vaults.yaml`). |
 | [BDH Graph Harness](https://github.com/albidev/bdh-graph-harness) | session-synthesis review, merge, source notes | Reached at `BDH_API_URL` (default `http://127.0.0.1:8643`). Set `session_synthesis_staging_enabled: true` so session synthesis lands as pending candidates in `<vault>/.bdh-candidates/` instead of being written straight into the vault. |
 | [bdh-hermes-bridge](https://github.com/albidev/bdh-hermes-bridge) | producing candidates | Sends Hermes sessions to BDH as `session_synthesis`. Without it (or another producer) the queue stays empty. |
-| [Hermes Agent](https://github.com/NousResearch/hermes-agent) | AI advisor only | The advisor calls the model through the Hermes runtime (`hermes` on `PATH`, or `advisor.hermes_bin`). Provider credentials stay in Hermes. |
+| [Hermes Agent](https://github.com/NousResearch/hermes-agent) | AI advisor and merge reconciliation | The advisor calls the model through the Hermes runtime (`hermes` on `PATH`, or `advisor.hermes_bin`). Provider credentials stay in Hermes. |
 | Curate sidecar (`CURATE_SIDECAR_URL`, default `http://127.0.0.1:8775`) | clustering, Jev gate, auto-reject audit | Optional, and not published. The **Run Jev gate** button only appears when it is reachable. |
 | A legacy candidate producer | legacy file candidates only | Curate also reviews YAML-frontmatter `.md` files in a vault's `candidates_dir`. The author's producer (a nightly `vault-brain-v2.py` script) and the post-quarantine promoter are not published, so on another install this queue stays empty unless you write such files yourself. Session synthesis does not depend on it. |
 
@@ -259,6 +259,34 @@ This feature requires matching merge endpoints in BDH. Older BDH installations
 return an error; Curate never replaces an unavailable merge with Approve/create.
 After an approved deployment, reload BDH and the MC telemetry plugin loader.
 Development verification must not restart either live service.
+
+### AI-assisted reconciliation (possible-conflict 409)
+
+BDH's negation/replacement word guard is a warning, not a semantic contradiction.
+When the preview carries `conflict.required`, **Confirm merge** remains disabled.
+Use **Analyze compatibility with AI** to compare the unchanged candidate and full
+existing note. Curate uses the same per-vault provider/model and Hermes launcher
+as its advisor; no model credentials or tool/write permissions are passed to the model.
+The full texts are sent to that configured provider. They are treated as untrusted
+evidence, not instructions, and inputs above 60,000 combined characters fail without truncation.
+
+The model returns only `compatible`, `conflicting`, or `uncertain`, a rationale,
+and exact quotes from both texts. Invented quotes or malformed responses fail closed.
+The worker stores a revision-bound assessment record in BDH, but does **not**
+approve a candidate, change its status, edit a note, or execute a merge.
+
+Only a compatible result exposes the separate human checkbox. Read both texts
+and the rationale, acknowledge the compatible addition, then click **Confirm merge**.
+BDH requires both `confirmed: true` and `conflict_confirmed: true`, plus the stored
+`reconciliation_id` bound to this vault, candidate, target and both revisions.
+A changed target/text invalidates the assessment; conflicting or uncertain results
+cannot be overridden through this flow. Audit records identify the human and the
+assessment ID; the existing operation journal and revert behavior are unchanged.
+
+Possible-conflict candidates are excluded from bulk acceptance: open them individually.
+Reconciliation requires BDH's `/api/synthesis/merge-reconciliation` endpoint alongside
+merge preview/confirmation. An older BDH returns an error with no fallback. The plugin
+routes are `POST /synthesis/reconcile` and `GET /synthesis/reconcile/status?job=<id>`.
 
 ## UI contract
 
@@ -529,13 +557,16 @@ In another terminal, use a scratch Python venv with Playwright and Chromium:
 
 ```bash
 python3 browser-harness/verify_merge_browser.py
+python3 browser-harness/verify_reconciliation_browser.py
 ```
 
 `CURATE_MC_ROOT` overrides the host checkout. `CURATE_UI_TEST_URL` overrides the
 loopback harness URL. `CURATE_BROWSER_EXECUTABLE` selects a cached Chromium when
 its revision differs from the Playwright package. The checks cover rendered
 confirmation, cancel/Escape, missing hints/search, stale revisions, mobile detail
-and duplicate clicks. No production API is called.
+and duplicate clicks. The reconciliation checks add compatible/conflicting/uncertain
+results, provider failure, stale assessments, target-change reset, separate human
+confirmation and a 390px Italian mobile layout. No production API is called.
 
 BDH's `tests/test_curate_directed_merge_integration.py` uses MC's real manifest
 loader, real HTTP adapters, and temporary BDH vaults to verify the complete

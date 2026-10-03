@@ -88,4 +88,4 @@ jobs:
           node-version: '22'
 
       - name: Run plugin UI unit tests
-        run: node --experimental-strip-types --test test_approval_notice.test.mjs test_pagination.test.mjs
+        run: node --experimental-strip-types --test test_approval_notice.test.mjs test_pagination.test.mjs test_merge_reconciliation.test.mjs

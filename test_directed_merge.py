@@ -39,6 +39,15 @@ def test_merge_endpoint_forwards_owned_correlation_without_approve(monkeypatch):
     assert merge[2]['synthesis_id'] == 'syn-owned' and merge[2]['session_id'] == 'sess-owned'
     assert merge[2]['source'] == 'session_synthesis'
     assert [path for path, _, _ in calls if '/approve' in path or '/apply' in path] == []
+    result = endpoints.mergeSynthesisCandidate({'candidate_id': 'cand-one', 'vault': 'core',
+        'target_node_id': 'vault:wiki/a.md', 'candidate_revision': 'a' * 64, 'target_revision': 'b' * 64,
+        'confirmed': True, 'reconciliation_id': 'rec-' + 'c' * 32, 'conflict_confirmed': True}, {})
+    assert calls[-1][2]['reconciliation_id'] == 'rec-' + 'c' * 32
+    assert calls[-1][2]['conflict_confirmed'] is True
+    with pytest.raises(Exception, match='conflict_confirmed'):
+        endpoints.mergeSynthesisCandidate({'candidate_id': 'cand-one', 'vault': 'core',
+            'target_node_id': 'vault:wiki/a.md', 'candidate_revision': 'a' * 64, 'target_revision': 'b' * 64,
+            'confirmed': True, 'reconciliation_id': 'rec-' + 'c' * 32, 'conflict_confirmed': 'true'}, {})
 
 
 @pytest.mark.parametrize("status", ["pending_review", "pre_approved"])
@@ -61,7 +70,8 @@ def test_merge_manifest_endpoints_are_authenticated_and_resolve_real_handlers():
     from pathlib import Path
     import endpoints
     manifest = json.loads(Path('manifest.json').read_text())
-    expected = {'/synthesis/merge-targets': 'GET', '/synthesis/merge-preview': 'POST', '/synthesis/merge': 'POST'}
+    expected = {'/synthesis/merge-targets': 'GET', '/synthesis/merge-preview': 'POST', '/synthesis/merge': 'POST',
+                '/synthesis/reconcile': 'POST', '/synthesis/reconcile/status': 'GET'}
     for path, method in expected.items():
         ep = next((e for e in manifest['endpoints'] if e['path'] == path), None)
         assert ep is not None, path

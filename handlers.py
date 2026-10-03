@@ -1166,14 +1166,17 @@ def preview_merge(candidate_id: str, vault: str, target_node_id: str):
 
 
 def merge_candidate(candidate_id: str, vault: str, target_node_id: str,
-                    candidate_revision: str, target_revision: str, confirmed: bool):
+                    candidate_revision: str, target_revision: str, confirmed: bool,
+                    reconciliation_id: Optional[str] = None, conflict_confirmed: bool = False):
     candidate, resolved = _merge_candidate(candidate_id, vault)
     try:
         result = _require_bdh_client().merge_synthesis_candidate(
             candidate_id=candidate_id, synthesis_id=candidate["synthesis_id"],
             session_id=candidate["session_id"], vault_id=resolved, source=candidate["source"],
             target_node_id=target_node_id, candidate_revision=candidate_revision,
-            target_revision=target_revision, confirmed=confirmed)
+            target_revision=target_revision, confirmed=confirmed,
+            **({"reconciliation_id": reconciliation_id, "conflict_confirmed": conflict_confirmed}
+               if reconciliation_id is not None else {}))
     except Exception as exc:
         raise _bdh_error(exc) from exc
     if result.get("status") not in {"merged", "noop"}:

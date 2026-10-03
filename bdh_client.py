@@ -288,11 +288,14 @@ def preview_synthesis_merge(candidate_id: str, vault_id: str, target_node_id: st
 
 def merge_synthesis_candidate(*, candidate_id: str, synthesis_id: str, session_id: str,
                               vault_id: str, source: str, target_node_id: str,
-                              candidate_revision: str, target_revision: str, confirmed: bool):
+                              candidate_revision: str, target_revision: str, confirmed: bool,
+                              reconciliation_id: str | None = None, conflict_confirmed: bool = False):
     return _merge_request("/api/synthesis/merge", method="POST", payload={
         "candidate_id": candidate_id, "synthesis_id": synthesis_id, "session_id": session_id,
         "vault_id": vault_id, "source": source, "target_node_id": target_node_id,
         "candidate_revision": candidate_revision, "target_revision": target_revision, "confirmed": confirmed,
+        **({"reconciliation_id": reconciliation_id, "conflict_confirmed": conflict_confirmed}
+           if reconciliation_id is not None else {}),
     })
 
 
