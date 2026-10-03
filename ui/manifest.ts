@@ -3,7 +3,7 @@ export const curateManifest: MCPluginManifest = {
   id: 'curate',
   name: 'Curate',
   description: 'Review BDH session-synthesis and legacy candidate proposals',
-  version: '1.2.0',
+  version: '1.4.2',
   enabled: true,
   navItem: {
     to: '/curate',

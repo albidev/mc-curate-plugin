@@ -2,7 +2,7 @@
   "id": "curate",
   "name": "Curate",
   "description": "Review BDH session-synthesis and legacy candidate proposals",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "enabled": true,
   "routePath": "/curate",
   "navItem": {
