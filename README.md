@@ -20,6 +20,19 @@ Curate integrates two public projects:
 
 Curate is installed as an external plugin by cloning this repository into the Hermes plugin directory. The plugin repository itself is intentionally distributed separately from the host and the BDH runtime.
 
+## Requirements
+
+| Component | Needed for | Notes |
+|---|---|---|
+| [Hermes Mission Control](https://github.com/albidev/hermes-mission-control) | everything | Hosts the UI and runs the plugin backend inside its telemetry service. That Python environment needs PyYAML (it reads `curate-vaults.yaml`). |
+| [BDH Graph Harness](https://github.com/albidev/bdh-graph-harness) | session-synthesis review, merge, source notes | Reached at `BDH_API_URL` (default `http://127.0.0.1:8643`). Set `session_synthesis_staging_enabled: true` so session synthesis lands as pending candidates in `<vault>/.bdh-candidates/` instead of being written straight into the vault. |
+| [bdh-hermes-bridge](https://github.com/albidev/bdh-hermes-bridge) | producing candidates | Sends Hermes sessions to BDH as `session_synthesis`. Without it (or another producer) the queue stays empty. |
+| [Hermes Agent](https://github.com/NousResearch/hermes-agent) | AI advisor only | The advisor calls the model through the Hermes runtime (`hermes` on `PATH`, or `advisor.hermes_bin`). Provider credentials stay in Hermes. |
+| Curate sidecar (`CURATE_SIDECAR_URL`, default `http://127.0.0.1:8775`) | clustering, Jev gate, auto-reject audit | Optional, and not published. The **Run Jev gate** button only appears when it is reachable. |
+
+The plugin itself has no Python dependency beyond the standard library and PyYAML, and no
+credentials of its own.
+
 ## Install
 
 Curate is installed by cloning this repository into the Hermes external plugin directory:
@@ -51,7 +64,18 @@ launchctl kickstart -k gui/$(id -u)/ai.hermes.mission-control-telemetry
 launchctl kickstart -k gui/$(id -u)/ai.hermes.mission-control
 ```
 
-The plugin is active when its directory contains a valid `manifest.json`. There is no Curate-specific environment variable.
+The plugin is active when its directory contains a valid `manifest.json`.
+
+Optional local configuration (vault labels, extra vaults, the AI advisor):
+
+```bash
+mkdir -p "${HERMES_HOME:-$HOME/.hermes}/vault-brain"
+cp ~/.hermes/mc-plugins/curate/curate-vaults.example.yaml \
+  "${HERMES_HOME:-$HOME/.hermes}/vault-brain/curate-vaults.yaml"
+```
+
+Without it, Curate shows BDH's default vault and the AI advisor stays off. Environment
+overrides: `BDH_API_URL`, `CURATE_SIDECAR_URL`, `VB_QUARANTINE_DAYS` (legacy candidates).
 
 ## Repository layout
 
@@ -257,16 +281,17 @@ Details are never opened automatically. A candidate modal appears only after an 
 
 ### Clustering and the Jev gate (optional backend)
 
-The UI supports an optional curation pipeline provided by the
-[bdh-nightly-consolidation](https://github.com/albidev/bdh-nightly-consolidation)
-sidecar (`curate/curate_server.py`, commit `535c185`). **The plugin works fully
-without it** — every extended behavior degrades gracefully:
+The UI supports an optional curation pipeline provided by a Curate sidecar
+(`curate/curate_server.py` in the author's private `bdh-nightly-consolidation`
+repository; not published). **The plugin works fully without it**: every extended
+behavior degrades gracefully:
 
 | Backend capability | UI behavior when missing |
 |---|---|
 | `GET /api/local/candidates/clustered` | Endpoint failure is swallowed; all candidates render as individual cards (the pre-clustering layout). |
 | `status: pre_approved` on candidates | The filter option exists but the list is empty; pending cards render as before. |
 | `status: auto_rejected` | The "Auto-rejected" filter shows the documented empty state; the Restore button is only reachable from a populated section. |
+| `POST /api/local/candidates/classify` | The **Run Jev gate** button is hidden (the clustered endpoint reports `sidecar: unavailable`). |
 
 Conversely, when the sidecar pipeline is enabled the review queue upgrades to:
 
@@ -310,7 +335,7 @@ human step: see **Accepting AI suggestions in bulk** below.
 
 | Route | Purpose |
 |---|---|
-| `POST /api/local/curate/advise` `{vault, candidate_ids}` | Starts a job and returns the job id. Candidates that are already reviewed, missing, or in progress are listed under `skipped`. |
+| `POST /api/local/curate/advise` `{vault, candidate_ids, locale?}` | Starts a job and returns the job id. Candidates that are already reviewed, missing, or in progress are listed under `skipped`. |
 | `GET /api/local/curate/advise/status?job=` | Live job state. The UI polls it every second while a job is active. |
 | `GET /api/local/curate/advise/active?vault=` | Jobs still running plus the configured model, so a page reload picks up running jobs. |
 
@@ -324,7 +349,7 @@ How it works:
      is read-only: no Hebbian update and no neurogenesis. If BDH is down, it falls back to
      `merge-targets` title matches.
   2. sends the model the candidate, those notes, similar pending candidates, the vault's
-     **signal / noise profile**, and up to 6 **past decisions by Albi** from the same vault.
+     **signal / noise profile**, and up to 6 **past decisions by the owner** from the same vault.
      The past decisions are approvals that overruled a curator reject, rejections that overruled a
      curator approve, and rejections with a content reason. Plain agreements are skipped because
      they say nothing about the bar. Rejections justified by provenance (probe artifacts) are skipped
@@ -343,22 +368,17 @@ A `merge` opinion sets `curator_merge_target`. Approve then opens the directed m
 the same thing that happens after a curator-review merge verdict. A later `approve` or `reject`
 opinion removes that target.
 
-The model is chosen per vault in the local `curate-vaults.yaml`. That file is gitignored and
-never committed:
+The advisor is configured in the local `curate-vaults.yaml` (gitignored; start from
+[`curate-vaults.example.yaml`](curate-vaults.example.yaml)):
 
-```yaml
-advisor:
-  default: {provider: anthropic, model: claude-sonnet-5}   # every vault without an override
-  concurrency: 4
-vaults:
-  core:
-    advisor:
-      provider: ollama-cloud
-      model: deepseek-v4.1-flash
-      description: Core — Hermes Agent, Mission Control, BDH memory system, ...
-      signal: [Diagnoses from real incidents on our stack, ...]   # what is signal for us
-      noise: [Textbook definitions with nothing specific to us, ...]
-```
+- `advisor.default` sets provider and model; a vault's `advisor.provider` / `advisor.model`
+  override them.
+- `advisor.owner` names whose decisions the advisor imitates ("Dana"). The prompt uses it for the
+  past decisions and the curator's role. Default: "the vault owner".
+- The reasons are written in Mission Control's UI language, sent by the UI as `locale`.
+  `advisor.language` (root or per vault, e.g. `Italian`) pins one instead.
+- Each vault's `description`, `signal`, and `noise` describe what counts for that vault. Your own
+  past decisions outrank this profile.
 
 ### Accepting AI suggestions in bulk
 
@@ -397,7 +417,7 @@ Guarantees (`accept_jobs.py`, `test_accept.py`):
 - **The advisor never learns from itself.** A rejection accepted from a suggestion is stored
   with the model's reason and `decided_via: ai_accepted`. `advisor_prompt.precedent_of` skips it.
   The advisor jobs also overlay the local rejection ledger. Curate rejections live only in that
-  ledger, so without the overlay the advisor would not see Albi's rejections and their reasons.
+  ledger, so without the overlay the advisor would not see the owner's rejections and their reasons.
 - **BDH stalls are retried.** Every vault write triggers a graph rebuild in BDH, and BDH can
   then stop responding for a minute or two. BDH calls are retried with backoff for up to 150 s.
   Retries are safe: approve/apply and directed merge are idempotent for identical requests.

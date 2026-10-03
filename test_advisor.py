@@ -25,10 +25,10 @@ def test_vault_override_wins_and_other_vaults_inherit_default():
     _write_settings(
         "advisor:\n  default: {provider: anthropic, model: claude-sonnet-5}\n"
         "vaults:\n  core:\n    advisor: {provider: ollama-cloud, model: deepseek-v4.1-flash, signal: [real incidents]}\n"
-        "  crossnection:\n    advisor: {description: Client work}\n"
+        "  work:\n    advisor: {description: Client work}\n"
     )
     core = advisor_jobs.advisor_config("core")
-    other = advisor_jobs.advisor_config("crossnection")
+    other = advisor_jobs.advisor_config("work")
     assert (core["provider"], core["model"]) == ("ollama-cloud", "deepseek-v4.1-flash")
     assert (other["provider"], other["model"]) == ("anthropic", "claude-sonnet-5")
     assert other["description"] == "Client work"
@@ -72,6 +72,7 @@ def test_worker_writes_opinions_live_and_never_touches_reviewed_candidates(tmp_p
         "job_id": "adv-0000000000000000", "vault": "core", "status": "queued", "provider": "p", "model": "m",
         "bdh_url": "http://127.0.0.1:9", "vault_root": str(vault), "candidates_dir": str(cands),
         "concurrency": 2, "order": list(files), "items": {cid: {"state": "queued"} for cid in files},
+        "owner": "Dana", "language": "it",
     }), encoding="utf-8")
 
     node = "vault:wiki/concepts/a.md"
@@ -84,7 +85,10 @@ def test_worker_writes_opinions_live_and_never_touches_reviewed_candidates(tmp_p
         "cand-reject": ['{"verdict":"reject","confidence":0.9,"merge_target":null,"reason":"generic"}'],
     }
 
+    seen = []
+
     def complete(messages):
+        seen.append(messages)
         cid = next(c for c in answers if f"title: Title {c}\n" in messages[1]["content"])
         return answers[cid].pop(0)
 
@@ -101,6 +105,22 @@ def test_worker_writes_opinions_live_and_never_touches_reviewed_candidates(tmp_p
     assert rejected["curator_verdict"] == "reject" and "curator_merge_target" not in rejected
     assert applied == files["cand-applied"]
     assert json.loads(job_path.read_text())["items"] == items  # the file the UI polls holds the same state
+    system, user = seen[0][0]["content"], seen[0][1]["content"]
+    assert "the way Dana does" in system and "in Italian" in system and "PAST DECISIONS BY DANA" in user
+
+
+def test_prompt_names_the_configured_owner_and_reason_language_only():
+    _write_settings("advisor:\n  default: {provider: p, model: m}\n  owner: Dana\n"
+                    "vaults:\n  core:\n    advisor: {language: Italian}\n  work: {}\n")
+    core, work = advisor_jobs.advisor_config("core"), advisor_jobs.advisor_config("work")
+    assert (core["owner"], core["language"]) == ("Dana", "Italian") and (work["owner"], work["language"]) == ("Dana", "")
+
+    anonymous = advisor_prompt.system_prompt()
+    assert "the vault owner's knowledge vault" in anonymous and "in English" in anonymous
+    assert "Dana" not in anonymous and "Albi" not in anonymous
+    assert "in Italian" in advisor_prompt.system_prompt("Dana", "it")
+    assert "PAST DECISIONS BY THE VAULT OWNER" in advisor_prompt.build_user_prompt(
+        vault_id="core", description="", candidate=_candidate("c1"), notes=[], siblings=[])
 
 
 def test_dead_worker_marks_job_failed_instead_of_spinning_forever():
@@ -114,11 +134,11 @@ def test_dead_worker_marks_job_failed_instead_of_spinning_forever():
     assert json.loads(Path(path).read_text())["status"] == "failed"
 
 
-def test_precedents_are_albis_informative_decisions_only():
+def test_precedents_are_the_owners_informative_decisions_only():
     reviewed = [
-        # Albi approved what the curator wanted to reject: an override, always informative.
+        # The owner approved what the curator wanted to reject: an override, always informative.
         {**_candidate("cand-o1", "applied", {"curator_verdict": "reject", "curator_note": "generic"}), "title": "Vite Proxy 502 Diagnosis"},
-        # Plain agreement: no information about Albi's bar.
+        # Plain agreement: no information about the owner's bar.
         {**_candidate("cand-a1", "applied", {"curator_verdict": "approve"}), "title": "Vite Proxy Agreement"},
         # Rejection with a content reason.
         {**_candidate("cand-r1", "rejected"), "title": "Proxy UX Pattern", "rejection_reason": "pattern UX generico"},

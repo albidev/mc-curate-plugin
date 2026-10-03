@@ -99,12 +99,12 @@ def test_a_suggestion_changed_after_review_is_never_applied(tmp_path):
 def test_accepted_rejections_never_become_precedents_but_human_ones_do(tmp_path):
     ops = FakeOps([_cand("c1", "reject", note="model words")], {})
     _job(ops, [("c1", "reject")], tmp_path).run()
-    bdh_rejections.record_rejection(candidate_id="h1", vault_id="core", reason="Albi: too generic for us")
+    bdh_rejections.record_rejection(candidate_id="h1", vault_id="core", reason="too generic for us")
     raw = [_cand("c1", "reject"), _cand("h1", "approve")]
     seen = advisor_prompt.overlay_rejections(raw, advisor_jobs.rejection_ledger("core"))
     precedents = advisor_prompt.select_precedents(_cand("x", "reject"), seen)
     assert [p["why"] for p in precedents] == [
-        "overruled the curator, who wanted to approve it. Reason: Albi: too generic for us"]
+        "overruled the curator, who wanted to approve it. Reason: too generic for us"]
     assert all(c["status"] == "rejected" for c in seen)  # both are decided, neither is an open sibling
 
 

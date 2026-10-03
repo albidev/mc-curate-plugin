@@ -4,10 +4,12 @@ Pure module (stdlib only) so it is importable both by the plugin process
 (tests, telemetry Python) and by ``advisor_worker`` inside the Hermes runtime.
 
 What counts as signal is NOT defined here. It comes from two places:
-- the per-vault ``signal`` / ``noise`` profile in ``curate-vaults.yaml`` (written by Albi);
-- Albi's own past decisions in the same vault (``select_precedents``), which the
+- the per-vault ``signal`` / ``noise`` profile in ``curate-vaults.yaml`` (written by the owner);
+- the owner's own past decisions in the same vault (``select_precedents``), which the
   prompt ranks above the profile and above the model's own taste.
-The system prompt only fixes the decision mechanics (approve / merge / reject).
+The system prompt only fixes the decision mechanics (approve / merge / reject). Who the owner
+is (``advisor.owner``) and the language of ``reason`` are settings, not part of the prompt.
+
 """
 from __future__ import annotations
 
@@ -15,7 +17,9 @@ import json
 import re
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
-PROMPT_VERSION = "2026-10-03.3"
+PROMPT_VERSION = "2026-10-04.1"
+DEFAULT_OWNER = "the vault owner"
+LANGUAGES = {"en": "English", "it": "Italian"}
 VERDICTS = ("approve", "merge", "reject")
 ADVISABLE_STATUSES = ("pending_review", "pre_approved")
 HUMAN_APPROVED_STATUSES = ("applied", "approved", "promoted")
@@ -25,10 +29,10 @@ MAX_PRECEDENTS = 6
 # content: the model never sees provenance, so they would teach the wrong rule.
 _PROVENANCE_REASON = re.compile(r"\bartifact\b|not a daemon synthesis", re.I)
 
-SYSTEM_PROMPT = """You are the Vault Curator for Albi's knowledge vault. A session-synthesis extractor proposed a CANDIDATE note. Your job is to separate SIGNAL from NOISE the way Albi does, and advise what he should do; he confirms with one click, so be decisive and precise.
+_SYSTEM_TEMPLATE = """You are the Vault Curator for {owner_possessive} knowledge vault. A session-synthesis extractor proposed a CANDIDATE note. Your job is to separate SIGNAL from NOISE the way {owner} does, and advise what to do; {owner} confirms with one click, so be decisive and precise.
 
 What counts as signal is defined, in order of authority, by:
-1. PAST DECISIONS BY ALBI in this vault: real verdicts, including cases where he overruled an earlier curator. When the candidate resembles one of them, decide the same way and say so.
+1. PAST DECISIONS BY {owner_upper} in this vault: real verdicts, including cases where an earlier curator was overruled. When the candidate resembles one of them, decide the same way and say so.
 2. The vault's SIGNAL / NOISE profile.
 3. Only when both are silent: your own judgement of durability and specificity.
 
@@ -46,7 +50,22 @@ Rules:
 6. Use only the inputs given. Lower your confidence when the evidence is thin; do not invent facts.
 
 Return ONLY a JSON object, no prose, no code fence:
-{"verdict": "approve" | "merge" | "reject", "confidence": <0.0-1.0>, "merge_target": "<node_id>" | null, "reason": "<una o due frasi in italiano, max 200 caratteri: perché è segnale o rumore per questo vault; cita la nota esistente o la decisione passata quando ti ci appoggi>"}"""
+{{"verdict": "approve" | "merge" | "reject", "confidence": <0.0-1.0>, "merge_target": "<node_id>" | null, "reason": "<one or two sentences in {language}, max 200 characters: why this is signal or noise for this vault; cite the existing note or the past decision you rely on>"}}"""
+
+
+def _possessive(owner: str) -> str:
+    return owner + ("'" if owner.endswith("s") else "'s")
+
+
+def system_prompt(owner: str = "", language: str = "") -> str:
+    """The curator system prompt for one owner, answering in one language (code or name)."""
+    who = " ".join(str(owner or "").split())[:60] or DEFAULT_OWNER
+    lang = str(language or "").strip()
+    lang = LANGUAGES.get(lang.lower(), lang[:30]) or "English"
+    return _SYSTEM_TEMPLATE.format(owner=who, owner_possessive=_possessive(who), owner_upper=who.upper(), language=lang)
+
+
+SYSTEM_PROMPT = system_prompt()
 
 
 class AdviceError(ValueError):
@@ -88,7 +107,7 @@ def overlay_rejections(candidates: Iterable[Mapping[str, Any]], ledger: Mapping[
 
     A Curate reject is recorded only in ``session-synthesis-rejections.jsonl``;
     BDH keeps the file at ``pending_review``. Without this overlay the advisor
-    would treat Albi's rejections as open siblings and never see their reasons.
+    would treat the owner's rejections as open siblings and never see their reasons.
     """
     out = []
     for raw in candidates:
@@ -103,11 +122,11 @@ def overlay_rejections(candidates: Iterable[Mapping[str, Any]], ledger: Mapping[
 
 
 def precedent_of(raw: Mapping[str, Any]) -> Optional[Dict[str, str]]:
-    """Turn one reviewed candidate into a decision by Albi worth showing, or None.
+    """Turn one reviewed candidate into a decision by the owner worth showing, or None.
 
     Kept: approvals that overruled a curator ``reject``, rejections that overruled a
     curator ``approve``, and every rejection with a content reason. Plain agreements
-    and pre-gate auto-applies carry no information about Albi's bar and are skipped,
+    and pre-gate auto-applies carry no information about the owner's bar and are skipped,
     and so is every decision taken by accepting an AI suggestion: its reason is the
     model's own, and learning from it would make the advisor cite itself.
     """
@@ -131,7 +150,7 @@ def precedent_of(raw: Mapping[str, Any]) -> Optional[Dict[str, str]]:
 
 
 def select_precedents(candidate: Mapping[str, Any], reviewed: Iterable[Mapping[str, Any]], limit: int = MAX_PRECEDENTS) -> List[Dict[str, str]]:
-    """Albi's decisions most related to this candidate, then the most recent ones.
+    """The owner's decisions most related to this candidate, then the most recent ones.
 
     At most ``limit // 2`` of each decision so the examples never all point one way.
     """
@@ -176,6 +195,7 @@ def build_user_prompt(
     signal: Sequence[str] = (),
     noise: Sequence[str] = (),
     precedents: Sequence[Mapping[str, str]] = (),
+    owner: str = "",
 ) -> str:
     extra = _extra(candidate)
     raw_provenance = candidate.get("provenance")
@@ -186,7 +206,8 @@ def build_user_prompt(
     lines = [f"VAULT: {vault_id} — {description}" if description else f"VAULT: {vault_id}", ""]
     lines += _profile_lines("SIGNAL in this vault", signal)
     lines += _profile_lines("NOISE in this vault", noise)
-    lines += ["", "PAST DECISIONS BY ALBI IN THIS VAULT (most related first)"]
+    who = " ".join(str(owner or "").split())[:60] or DEFAULT_OWNER
+    lines += ["", f"PAST DECISIONS BY {who.upper()} IN THIS VAULT (most related first)"]
     if precedents:
         for p in precedents:
             lines.append(f"- {p['decision'].upper()}: {p['title']} — {p['definition']}")

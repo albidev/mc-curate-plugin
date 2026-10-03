@@ -601,6 +601,8 @@ export function CurateRoute() {
   const autoRejectedSectionRef = useRef<HTMLElement | null>(null);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [clusters, setClusters] = useState<ClusterInfo[]>([]);
+  // The Jev gate lives in the optional Curate sidecar; its clustered endpoint reports when it is down.
+  const [pipelineAvailable, setPipelineAvailable] = useState(false);
   const [expandedClusters, setExpandedClusters] = useState<Set<string>>(new Set());
   const [restoringId, setRestoringId] = useState<string | null>(null);
   const [selectedVault, setSelectedVault] = useState(searchParams.get('vault') || '');
@@ -678,16 +680,18 @@ export function CurateRoute() {
       const [candidateResult, vaultResult, clusterResult] = await Promise.allSettled([
         requestJSON<{ candidates: Candidate[]; vault?: string | null }>(candidatePath, token),
         requestJSON<{ vaults: VaultInfo[]; default_vault?: string | null }>('/candidates/vaults', token),
-        requestJSON<{ clusters: ClusterInfo[] }>(selectedVault ? `/candidates/clustered?vault=${encodeURIComponent(selectedVault)}` : '/candidates/clustered', token),
+        requestJSON<{ clusters: ClusterInfo[]; sidecar?: string }>(selectedVault ? `/candidates/clustered?vault=${encodeURIComponent(selectedVault)}` : '/candidates/clustered', token),
       ]);
       if (vaultResult.status === 'rejected') throw vaultResult.reason;
       const vaultPayload = vaultResult.value;
       setVaults(vaultPayload.vaults || []);
       if (clusterResult.status === 'fulfilled') {
         setClusters(clusterResult.value.clusters || []);
+        setPipelineAvailable(clusterResult.value.sidecar !== 'unavailable');
       } else {
         // clustering unavailable (older backend / pipeline down): flat list
         setClusters([]);
+        setPipelineAvailable(false);
       }
       if (candidateResult.status === 'rejected') {
         setCandidates([]);
@@ -953,9 +957,9 @@ export function CurateRoute() {
               <span className="hidden sm:inline">{accept.progress ? t('review.applying', { done: accept.progress.completed, total: accept.progress.total }) : t('review.label', { count: reviewableIds.length })}</span>
               <span className="sm:hidden">{accept.progress ? `${accept.progress.completed}/${accept.progress.total}` : t('review.short', { count: reviewableIds.length })}</span>
             </Button>}
-            <Button variant="secondary" onClick={() => void runClassify()} disabled={classifying || refreshing} title={t('gate.title')} className="px-3 text-sm">
+            {pipelineAvailable && <Button variant="secondary" onClick={() => void runClassify()} disabled={classifying || refreshing} title={t('gate.title')} className="px-3 text-sm">
               <Sparkles size={15} className={classifying ? 'animate-spin' : ''} /> <span className="hidden sm:inline">{classifying ? t('gate.running') : t('gate.run')}</span><span className="sm:hidden">{t('gate.short')}</span>
-            </Button>
+            </Button>}
             <Button variant="secondary" onClick={() => void load(true)} disabled={refreshing}>
               <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} /> {t('common.refresh')}
             </Button>

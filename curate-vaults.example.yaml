@@ -1,0 +1,41 @@
+# Curate local configuration — copy to $HERMES_HOME/vault-brain/curate-vaults.yaml
+# (default ~/.hermes/vault-brain/curate-vaults.yaml). The real file is gitignored:
+# it holds your vault paths and your taste, never credentials.
+#
+# Without this file Curate reviews the session-synthesis candidates of BDH's default
+# vault, and the AI advisor stays off. A further vault appears once it has an entry
+# below with a `candidates_dir`.
+
+# AI advisor: on-demand approve / merge / reject opinions (per card or in bulk).
+# Requires an installed Hermes Agent: the advisor calls the model through Hermes, so
+# provider ids are Hermes provider ids and credentials come from Hermes (~/.hermes/.env).
+advisor:
+  default:                     # used by every vault without its own provider/model
+    provider: anthropic
+    model: claude-sonnet-5
+  concurrency: 4               # parallel model calls per job (1-8)
+  owner: Dana                  # whose taste the advisor imitates; default "the vault owner"
+  # language: English          # language of the advisor's reasons; default: Mission Control's UI language
+  # hermes_bin: /path/to/hermes  # only if `hermes` is not on PATH
+
+vaults:
+  core:                        # a vault id served by BDH (GET /api/vaults)
+    label: Core
+    # Directory of legacy file candidates (YAML-frontmatter .md). Setting it also makes
+    # a non-default BDH vault appear in Curate; it may be empty.
+    candidates_dir: ~/.hermes/vault-brain/candidates
+    # vault_dir: ~/Documents/MyVault   # root for source-note evidence, if not $HERMES_HOME/vault
+    advisor:
+      # provider: ollama-cloud     # per-vault override of advisor.default
+      # model: deepseek-v4.1-flash
+      description: Personal knowledge base — home lab, tooling, side projects
+      # What counts as signal and noise here. Your own past decisions in this vault
+      # are shown to the model and outrank this profile.
+      signal:
+        - Lessons that change how I act next time on my stack
+        - "Diagnoses from real incidents: symptom -> cause -> fix"
+        - Design decisions with their why
+      noise:
+        - Textbook definitions with nothing specific to how I use them
+        - Commentary about the conversation or the session itself
+        - One-off status, progress reports, TODOs

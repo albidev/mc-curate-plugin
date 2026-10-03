@@ -59,7 +59,7 @@ def record_rejection(
 
     ``decided_via="ai_accepted"`` marks a rejection taken by accepting an AI
     suggestion: its reason is the model's own words, so the advisor must not
-    learn from it as one of Albi's decisions.
+    learn from it as one of the owner's decisions.
     """
     record = {
         "candidate_id": candidate_id,

@@ -303,7 +303,7 @@ def classifyPendingCandidates(body: Dict[str, Any], params: Dict[str, List[str]]
 def startAdvice(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any = None) -> Dict[str, Any]:
     """POST /api/local/curate/advise {vault, candidate_ids} — start an advisor job."""
     import advisor_jobs
-    return advisor_jobs.start(body.get("vault"), body.get("candidate_ids"))
+    return advisor_jobs.start(body.get("vault"), body.get("candidate_ids"), body.get("locale"))
 
 
 def adviceStatus(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any = None) -> Dict[str, Any]:

@@ -925,12 +925,12 @@ def promote_ready() -> List[Dict[str, Any]]:
                 continue
             if qdt <= now:
                 # cron-brief delivery reports are dated logs, not concepts:
-                # archive to projects/<prefix>/reports/ (Plan B, Albi 2026-09-21).
+                # archive to projects/<profile prefix>/reports/, or projects/reports/
+                # when the report names no profile.
                 is_report = (c.get("type") or "") == "cron-brief" or str(c.get("id") or p.stem).startswith("cron-brief-")
                 if is_report:
-                    profile = c.get("profile") or "crossnection-delivery"
-                    prefix = str(profile).split("-")[0] or "crossnection"
-                    reports_dir = vault / "projects" / prefix / "reports"
+                    prefix = str(c.get("profile") or "").split("-")[0]
+                    reports_dir = vault / "projects" / prefix / "reports" if prefix else vault / "projects" / "reports"
                     reports_dir.mkdir(parents=True, exist_ok=True)
                     dest = reports_dir / f"{p.stem}.md"
                     body = c.get("body", "")

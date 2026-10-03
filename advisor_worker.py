@@ -106,6 +106,8 @@ class Advisor:
         self.description: str = spec.get("description") or ""
         self.signal: List[str] = [str(s) for s in spec.get("signal") or []]
         self.noise: List[str] = [str(s) for s in spec.get("noise") or []]
+        self.owner: str = str(spec.get("owner") or "")
+        self.system_prompt: str = prompt.system_prompt(self.owner, str(spec.get("language") or ""))
         self.bdh_url: str = spec["bdh_url"].rstrip("/")
         self.candidates_dir = Path(spec["candidates_dir"])
         self.vault_root = Path(spec["vault_root"]).resolve()
@@ -176,7 +178,7 @@ class Advisor:
         return any(t.get("node_id") == node_id for t in targets)
 
     def all_candidates(self) -> List[Dict[str, Any]]:
-        """Every candidate of the vault, read once per job (pending + Albi's past decisions).
+        """Every candidate of the vault, read once per job (pending + the owner's past decisions).
 
         Curate rejections live in the local ledger, not in the candidate files; the
         job carries a snapshot of it (``rejections``) taken when it started.
@@ -211,11 +213,11 @@ class Advisor:
             notes, mode = self.shortlist(candidate)
             titles = {n["node_id"]: n["title"] for n in notes}
             messages = [
-                {"role": "system", "content": prompt.SYSTEM_PROMPT},
+                {"role": "system", "content": self.system_prompt},
                 {"role": "user", "content": prompt.build_user_prompt(
                     vault_id=self.vault_id, description=self.description, candidate=candidate, notes=notes,
                     siblings=prompt.similar_pending(candidate, self.pending()), context_mode=mode,
-                    signal=self.signal, noise=self.noise,
+                    signal=self.signal, noise=self.noise, owner=self.owner,
                     precedents=prompt.select_precedents(candidate, self.all_candidates()))},
             ]
             advice = None

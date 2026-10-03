@@ -92,6 +92,8 @@ def advisor_config(vault: str) -> Dict[str, Any]:
         return [" ".join(str(v).split()) for v in value if str(v).strip()] if isinstance(value, list) else []
 
     return {"provider": provider, "model": model, "concurrency": max(1, min(concurrency, 8)),
+            "owner": " ".join(str(vault_cfg.get("owner") or root.get("owner") or "").split()),
+            "language": str(vault_cfg.get("language") or root.get("language") or "").strip(),
             "description": str(vault_cfg.get("description") or "").strip(),
             "signal": _lines("signal"), "noise": _lines("noise"),
             "hermes_bin": str(root.get("hermes_bin") or "").strip()}
@@ -217,7 +219,9 @@ def _active_jobs(vault: str) -> List[Dict[str, Any]]:
     return sorted(out, key=lambda j: j.get("created_at") or "")
 
 
-def start(vault: Any, candidate_ids: Any) -> Dict[str, Any]:
+def start(vault: Any, candidate_ids: Any, locale: Any = None) -> Dict[str, Any]:
+    """Queue one advisor job. ``locale`` (the UI language) sets the language of the
+    reasons unless ``advisor.language`` pins one in curate-vaults.yaml."""
     vault_id = handlers._validate_vault_id(vault)
     if not vault_id:
         raise CurateIntegrationError(400, "bad_request", "Missing vault.")
@@ -261,7 +265,8 @@ def start(vault: Any, candidate_ids: Any) -> Dict[str, Any]:
     job = {
         "job_id": job_id, "vault": vault_id, "status": "queued", "created_at": _now(),
         "provider": config["provider"], "model": config["model"], "description": config["description"],
-        "signal": config["signal"], "noise": config["noise"],
+        "signal": config["signal"], "noise": config["noise"], "owner": config["owner"],
+        "language": config["language"] or (locale if locale in advisor_prompt.LANGUAGES else "en"),
         "concurrency": config["concurrency"], "prompt_version": advisor_prompt.PROMPT_VERSION,
         "bdh_url": bdh_client._bdh_base_url(), "vault_root": str(vault_root), "candidates_dir": str(candidates_dir),
         "order": order, "total": len(order), "completed": 0,

@@ -136,7 +136,7 @@ export function useCuratorAdvisor({ vault, request, enabled, onAdvice }: {
   const ask = useCallback(async (candidateIds: string[]) => {
     const job = await request<AdviceJob>('/curate/advise', {
       method: 'POST',
-      body: JSON.stringify({ vault, candidate_ids: candidateIds }),
+      body: JSON.stringify({ vault, candidate_ids: candidateIds, locale: currentLocale() }),
     });
     setJobs((current) => ({ ...current, [job.job_id]: job }));
     return job;
