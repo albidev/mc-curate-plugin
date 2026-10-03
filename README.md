@@ -300,9 +300,13 @@ If a candidate contains metadata only, the UI says so instead of presenting raw 
 ### AI advisor (approve / merge / reject opinions)
 
 You can ask an LLM for an opinion on one candidate (brain icon on a card, or **Ask AI** in the
-detail dialog) or on every visible pending session-synthesis candidate (**Ask AI (N)** in the header).
+detail dialog) or in bulk (**Ask AI (N)** in the header). The bulk button counts only the visible
+pending session-synthesis candidates the advisor has not answered yet. A scheduled cron opinion
+still counts, because it comes from an older model. To ask again about a candidate that already
+has an opinion, use its detail dialog.
 Badges update live as each opinion lands. The advisor only gives an opinion: it never approves,
-merges, or rejects a candidate, and it never changes its status.
+merges, or rejects a candidate, and it never changes its status. Applying opinions is a separate,
+human step: see **Accepting AI suggestions in bulk** below.
 
 | Route | Purpose |
 |---|---|
@@ -355,6 +359,54 @@ vaults:
       signal: [Diagnoses from real incidents on our stack, ...]   # what is signal for us
       noise: [Textbook definitions with nothing specific to us, ...]
 ```
+
+### Accepting AI suggestions in bulk
+
+When a bulk **Ask AI** finishes, a banner offers **Rivedi e applica**. The **Review AI (N)**
+header button opens the same panel at any time. On a phone the panel is a full-screen sheet:
+verdict tabs at the top, and the apply button in a footer within thumb reach that respects the
+safe-area insets. On desktop it is a modal.
+
+- Each row shows the verdict, the confidence, the title and the reason. A merge row also shows
+  the target note. Tap a row to see the claim that will be appended next to the start of the
+  target note, or **Decidi a mano** to open the candidate itself.
+- Rows are pre-ticked only when the on-demand advisor is at least 80% confident. Cron opinions
+  are never pre-ticked. An `approve` that still carries a merge target is blocked, and so is a
+  merge without a usable preview.
+- **Applica N** runs one background job: rejects first, then approves, then merges grouped by
+  note. Closing the panel does not stop it. The header shows `Applico x/y`, and a reload
+  re-attaches to the job. Afterwards, approve and merge rows have **Annulla**, which uses BDH's
+  operation revert.
+
+| Route | Purpose |
+|---|---|
+| `POST /api/local/curate/accept/plan` `{vault, candidate_ids}` | Read-only. Returns rows with the current advice, an `advice_token`, and a merge preview (target, claim, revisions) for each merge. |
+| `POST /api/local/curate/accept` `{vault, items}` | Applies the ticked rows. Each item carries `id`, `verdict`, `advice_token`, and, for a merge, the previewed `target_node_id` and revisions. Only one batch can run per vault at a time (`409 accept_running`). |
+| `GET /api/local/curate/accept/status?job=` | Live state for each row: `queued`, `running`, `done`, `stale`, or `error`. |
+| `GET /api/local/curate/accept/active?vault=` | The running batch, if any. |
+
+Guarantees (`accept_jobs.py`, `test_accept.py`):
+
+- **Only what you saw is applied.** Each row is re-read before it is applied. If the advisor
+  re-ran or the candidate was decided in the meantime, the `advice_token` no longer matches and
+  the row ends as `stale`. Nothing is written for that row.
+- **Merges stay revision-checked.** A merge row sends the revisions from the preview, as the
+  single-merge dialog does. The only change tolerated is one made by this same batch: after
+  merging an earlier row into the same note, the job reads the note's new revision. Any other
+  edit to the note makes the row `stale`.
+- **The advisor never learns from itself.** A rejection accepted from a suggestion is stored
+  with the model's reason and `decided_via: ai_accepted`. `advisor_prompt.precedent_of` skips it.
+  The advisor jobs also overlay the local rejection ledger. Curate rejections live only in that
+  ledger, so without the overlay the advisor would not see Albi's rejections and their reasons.
+- **BDH stalls are retried.** Every vault write triggers a graph rebuild in BDH, and BDH can
+  then stop responding for a minute or two. BDH calls are retried with backoff for up to 150 s.
+  Retries are safe: approve/apply and directed merge are idempotent for identical requests.
+- A row that fails or goes `stale` does not stop the rest of the batch. If the telemetry service
+  restarts during a batch, the batch is marked failed and the rows still queued are left as they
+  were.
+
+If you disagree with a suggestion, untick the row and decide it by hand. That decision is the
+one the advisor learns from.
 
 ## Overview Attention surface
 

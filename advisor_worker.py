@@ -176,7 +176,11 @@ class Advisor:
         return any(t.get("node_id") == node_id for t in targets)
 
     def all_candidates(self) -> List[Dict[str, Any]]:
-        """Every candidate of the vault, read once per job (pending + Albi's past decisions)."""
+        """Every candidate of the vault, read once per job (pending + Albi's past decisions).
+
+        Curate rejections live in the local ledger, not in the candidate files; the
+        job carries a snapshot of it (``rejections``) taken when it started.
+        """
         if self._all is None:
             items = []
             for path in sorted(self.candidates_dir.glob("cand-*.json")):
@@ -186,7 +190,7 @@ class Advisor:
                     continue
                 if isinstance(raw, dict):
                     items.append(raw)
-            self._all = items
+            self._all = prompt.overlay_rejections(items, self.job.data.get("rejections") or {})
         return self._all
 
     def pending(self) -> List[Dict[str, Any]]:

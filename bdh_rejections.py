@@ -49,12 +49,17 @@ def record_rejection(
     session_id: str = "",
     title: str = "",
     reason: str = "",
+    decided_via: str = "",
 ) -> Dict[str, Any]:
     """Append one rejection record and return it.
 
     Safe fields only; the raw transcript and candidate definition are never
     written. Idempotent per candidate: a second rejection for the same
     candidate_id overwrites the previous reason rather than duplicating rows.
+
+    ``decided_via="ai_accepted"`` marks a rejection taken by accepting an AI
+    suggestion: its reason is the model's own words, so the advisor must not
+    learn from it as one of Albi's decisions.
     """
     record = {
         "candidate_id": candidate_id,
@@ -65,6 +70,8 @@ def record_rejection(
         "reason": reason,
         "rejected_at": datetime.now(timezone.utc).isoformat(),
     }
+    if decided_via:
+        record["decided_via"] = decided_via
     with _LOCK:
         path = _rejections_path()
         path.parent.mkdir(parents=True, exist_ok=True)

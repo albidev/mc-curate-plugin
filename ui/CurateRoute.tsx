@@ -29,6 +29,9 @@ import { approvalNotice } from './approval-notice';
 import { paginateItems } from './pagination';
 import { MergeDialog, type MergeResult } from './merge-dialog';
 import { CuratorAdvicePanel, CuratorBadge, adviceToFields, useCuratorAdvisor, type AdviceItem } from './advisor';
+import { AcceptReview, useAcceptJob, type AcceptJob } from './accept-review';
+import { currentLocale, formatDate, tr, useT } from './i18n';
+import { EN, type MessageKey } from './messages';
 
 function InlineActionButton({
   variant,
@@ -166,7 +169,8 @@ async function requestJSON<T>(path: string, token: string, init?: RequestInit): 
 }
 
 function statusLabel(status: string): string {
-  return status.replaceAll('_', ' ');
+  const key = `status.${status}` as MessageKey;
+  return key in EN ? tr(key) : status.replaceAll('_', ' ');
 }
 
 // Terminal states 'applied' (BDH synthesis flow) and 'promoted' (legacy
@@ -207,18 +211,12 @@ function confidenceValue(candidate: Candidate): number | null {
 function confidenceLabel(candidate: Candidate): string | null {
   // Prefer a word when the source was a word: "low" is honest, "33%" is fake precision.
   const raw = String(candidate.confidence || '').toLowerCase().trim();
-  if (raw === 'high' || raw === 'medium' || raw === 'low') return raw;
+  if (raw === 'high' || raw === 'medium' || raw === 'low') return tr(`confidence.${raw}`);
   const v = Number(candidate.confidence);
   if (Number.isFinite(v)) return `${Math.round(v * 100)}%`;
   return null;
 }
 
-function formatDate(value?: string): string {
-  if (!value || value === 'null') return 'Unknown date';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(date);
-}
 
 function parseList(value?: string | string[]): string[] {
   if (!value) return [];
@@ -292,32 +290,33 @@ function PaginationControls({
   itemLabel: string;
   onPageChange: (page: number) => void;
 }) {
+  const t = useT();
   if (pageCount < 2) return null;
 
   return (
     <div className="flex flex-col gap-3 border-t border-white/[0.08] pt-3 sm:flex-row sm:items-center sm:justify-between">
       <p className="text-xs text-text-muted" aria-live="polite">
-        Showing {start}–{end} of {total} {itemLabel}
+        {t('pagination.showing', { start, end, total, items: itemLabel })}
       </p>
-      <nav aria-label="Candidate pagination" className="flex items-center justify-between gap-2 sm:justify-end">
+      <nav aria-label={t('pagination.aria')} className="flex items-center justify-between gap-2 sm:justify-end">
         <button
           type="button"
           onClick={() => onPageChange(page - 1)}
           disabled={page <= 1}
-          aria-label="Previous page"
+          aria-label={t('pagination.previousAria')}
           className="rounded-lg border border-white/10 px-3 py-2 text-xs font-medium text-text-muted transition-colors hover:bg-white/[0.06] hover:text-text disabled:cursor-not-allowed disabled:opacity-40"
         >
-          Previous
+          {t('pagination.previous')}
         </button>
-        <span className="min-w-20 text-center text-xs text-text-muted">Page {page} of {pageCount}</span>
+        <span className="min-w-20 text-center text-xs text-text-muted">{t('pagination.page', { page, pages: pageCount })}</span>
         <button
           type="button"
           onClick={() => onPageChange(page + 1)}
           disabled={page >= pageCount}
-          aria-label="Next page"
+          aria-label={t('pagination.nextAria')}
           className="rounded-lg border border-white/10 px-3 py-2 text-xs font-medium text-text-muted transition-colors hover:bg-white/[0.06] hover:text-text disabled:cursor-not-allowed disabled:opacity-40"
         >
-          Next
+          {t('pagination.next')}
         </button>
       </nav>
     </div>
@@ -349,6 +348,7 @@ function ClusterCard({
   live?: AdviceItem;
   onAsk?: (candidate: Candidate) => void;
 }) {
+  const t = useT();
   const rep = candidates.find((c) => c.id === cluster.representative);
   const members = cluster.member_ids
     .map((id) => candidates.find((c) => c.id === id))
@@ -365,11 +365,11 @@ function ClusterCard({
         <div className="min-w-0 flex-1">
           <div className="mb-1 flex flex-wrap items-center gap-2">
             <span className="rounded-full border border-sky-400/25 bg-sky-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-sky-300">
-              Cluster · {cluster.member_ids.length} candidates
+              {t('cluster.badge', { count: cluster.member_ids.length })}
             </span>
             {cluster.mean_similarity !== null && (
               <span className="text-[11px] text-text-subtle">
-                similarity mean {(cluster.mean_similarity * 100).toFixed(0)}%
+                {t('cluster.similarity', { pct: (cluster.mean_similarity * 100).toFixed(0) })}
               </span>
             )}
             {rep && rep.jev_choice && (
@@ -380,7 +380,7 @@ function ClusterCard({
             {rep && <CuratorBadge fields={rep} live={live} />}
           </div>
           <h3 className="truncate text-[15px] font-semibold text-text">{cluster.representative_title || cluster.representative}</h3>
-          <p className="mt-1 line-clamp-2 text-sm leading-5 text-text-muted">{rep?.body || 'No candidate summary available.'}</p>
+          <p className="mt-1 line-clamp-2 text-sm leading-5 text-text-muted">{rep?.body || t('card.noSummary')}</p>
           {/* Details: collapsed by default */}
           <button
             type="button"
@@ -389,11 +389,11 @@ function ClusterCard({
             aria-expanded={expanded}
           >
             <ChevronDown size={13} className={`transition-transform ${expanded ? 'rotate-180' : ''}`} />
-            {expanded ? 'Hide cluster details' : `How this cluster formed (${others.length} similar candidates)`}
+            {expanded ? t('cluster.hide') : t('cluster.how', { count: others.length })}
           </button>
           {expanded && (
             <div className="mt-3 space-y-2 rounded-xl border border-white/[0.08] bg-black/10 p-3">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-text-subtle">Cluster members</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-text-subtle">{t('cluster.members')}</p>
               {others.map((member) => (
                 <div key={member.id} className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.03] px-2.5 py-2">
                   <button type="button" onClick={() => onSelectMember(member)} className="min-w-0 flex-1 text-left">
@@ -407,21 +407,21 @@ function ClusterCard({
                   )}
                 </div>
               ))}
-              {others.length === 0 && <p className="text-[11px] text-text-subtle">Single candidate.</p>}
+              {others.length === 0 && <p className="text-[11px] text-text-subtle">{t('cluster.single')}</p>}
               {rep?.jev_criteria_version && (
-                <p className="text-[10px] text-text-subtle">Jev criteria version: {rep.jev_criteria_version}</p>
+                <p className="text-[10px] text-text-subtle">{t('cluster.criteria', { version: rep.jev_criteria_version })}</p>
               )}
             </div>
           )}
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          {rep && onAsk && <InlineActionButton variant="ghost" title="Ask AI: approve, merge or reject the representative" disabled={live?.state === 'queued' || live?.state === 'running'} onClick={() => onAsk(rep)}><Brain size={14}/></InlineActionButton>}
-          {rep?.source === 'session_synthesis' && ['pending_review', 'pre_approved'].includes(rep.status) && <InlineActionButton variant="ghost" title="Merge representative into existing note (only this candidate)" disabled={!!actionId} onClick={() => onMerge(rep)}><GitMerge size={14}/></InlineActionButton>}
+          {rep && onAsk && <InlineActionButton variant="ghost" title={t('cluster.askAi')} disabled={live?.state === 'queued' || live?.state === 'running'} onClick={() => onAsk(rep)}><Brain size={14}/></InlineActionButton>}
+          {rep?.source === 'session_synthesis' && ['pending_review', 'pre_approved'].includes(rep.status) && <InlineActionButton variant="ghost" title={t('cluster.merge')} disabled={!!actionId} onClick={() => onMerge(rep)}><GitMerge size={14}/></InlineActionButton>}
           <InlineActionButton
             variant="primary"
             onClick={() => onApprove(rep || clusterToCandidate(cluster))}
             disabled={isProcessing}
-            title="Approve cluster (promotes representative, marks others merged)"
+            title={t('cluster.approve')}
           >
             <Check size={14} className={isProcessing ? 'animate-pulse' : ''} />
           </InlineActionButton>
@@ -429,7 +429,7 @@ function ClusterCard({
             variant="danger"
             onClick={() => onReject(rep || clusterToCandidate(cluster))}
             disabled={isProcessing}
-            title="Reject cluster"
+            title={t('cluster.reject')}
           >
             <XCircle size={14} />
           </InlineActionButton>
@@ -444,7 +444,7 @@ function clusterToCandidate(cluster: ClusterInfo): Candidate {
     id: cluster.representative,
     title: cluster.representative_title,
     status: 'pending_review',
-    body: `Cluster of ${cluster.member_ids.length} candidates: ${cluster.member_titles.join(' | ')}`,
+    body: tr('cluster.body', { count: cluster.member_ids.length, titles: cluster.member_titles.join(' | ') }),
     cluster_id: cluster.cluster_id,
   } as Candidate;
 }
@@ -460,6 +460,7 @@ function AutoRejectedCard({
   onSelect: () => void;
   restoring: boolean;
 }) {
+  const t = useT();
   const conf = candidate.jev_confidence ? Number(candidate.jev_confidence) : confidenceValue(candidate);
   return (
     <div className="rounded-2xl border border-orange-400/20 bg-orange-400/[0.04] p-4">
@@ -470,7 +471,7 @@ function AutoRejectedCard({
         <div className="min-w-0 flex-1">
           <div className="mb-1 flex flex-wrap items-center gap-2">
             <span className="rounded-full border border-orange-400/25 bg-orange-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-orange-300">
-              Auto-rejected
+              {t('autoRejected.badge')}
             </span>
             {candidate.jev_choice && (
               <span className={`text-[11px] ${jevTone(conf)}`}>
@@ -481,11 +482,11 @@ function AutoRejectedCard({
           </div>
           <button type="button" onClick={onSelect} className="w-full text-left">
             <h3 className="truncate text-[15px] font-semibold text-text">{candidate.title || candidate.id}</h3>
-            <p className="mt-1 line-clamp-2 text-sm leading-5 text-text-muted">{candidate.body || 'No candidate summary available.'}</p>
+            <p className="mt-1 line-clamp-2 text-sm leading-5 text-text-muted">{candidate.body || t('card.noSummary')}</p>
           </button>
         </div>
-        <Button variant="secondary" disabled={restoring} onClick={() => onRestore(candidate)} title="Revert to pending review">
-          {restoring ? <Loader2 size={14} className="animate-spin" /> : <Undo2 size={14} />} Restore
+        <Button variant="secondary" disabled={restoring} onClick={() => onRestore(candidate)} title={t('autoRejected.restoreTitle')}>
+          {restoring ? <Loader2 size={14} className="animate-spin" /> : <Undo2 size={14} />} {t('autoRejected.restore')}
         </Button>
       </div>
     </div>
@@ -513,6 +514,7 @@ function CandidateCard({
   live?: AdviceItem;
   onAsk?: (candidate: Candidate) => void;
 }) {
+  const t = useT();
   const confidence = confidenceValue(candidate);
   const tags = parseList(candidate.tags);
   const isPending = candidate.status === 'pending' || candidate.status === 'pending_review' || candidate.status === 'pre_approved';
@@ -539,7 +541,7 @@ function CandidateCard({
             {candidate.type && <span className="text-[11px] uppercase tracking-[0.12em] text-text-subtle">{candidate.type}</span>}
           </div>
           <h3 className="truncate text-[15px] font-semibold text-text">{candidate.title || candidate.id}</h3>
-          <p className="mt-1 line-clamp-2 text-sm leading-5 text-text-muted">{candidate.body || 'No candidate summary available.'}</p>
+          <p className="mt-1 line-clamp-2 text-sm leading-5 text-text-muted">{candidate.body || t('card.noSummary')}</p>
           <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-text-subtle">
             <span>{formatDate(candidate.created)}</span>
             {confidenceLabel(candidate) && (
@@ -551,7 +553,7 @@ function CandidateCard({
                   if (raw === 'low') return 'border-rose-400/25 bg-rose-400/10 text-rose-300';
                   return 'border-white/10 bg-white/[0.04] text-text-muted';
                 })()
-              }`}>extractor: {confidenceLabel(candidate)}</span>
+              }`}>{t('card.extractor', { value: confidenceLabel(candidate) ?? '' })}</span>
             )}
             {candidate.jev_choice && (
               <span className={jevTone(candidate.jev_confidence ? Number(candidate.jev_confidence) : null)}>
@@ -564,13 +566,13 @@ function CandidateCard({
         </div>
         {isPending && (
           <div className="flex items-center gap-1.5 ml-auto shrink-0">
-            {onAsk && <InlineActionButton variant="ghost" title="Ask AI: approve, merge or reject" disabled={live?.state === 'queued' || live?.state === 'running'} onClick={e => { e.stopPropagation(); onAsk(candidate); }}><Brain size={14}/></InlineActionButton>}
-            {candidate.source === 'session_synthesis' && <InlineActionButton variant="ghost" title="Merge into existing note" disabled={!!actionId} onClick={e => { e.stopPropagation(); onMerge(candidate); }}><GitMerge size={14}/></InlineActionButton>}
+            {onAsk && <InlineActionButton variant="ghost" title={t('card.askAi')} disabled={live?.state === 'queued' || live?.state === 'running'} onClick={e => { e.stopPropagation(); onAsk(candidate); }}><Brain size={14}/></InlineActionButton>}
+            {candidate.source === 'session_synthesis' && <InlineActionButton variant="ghost" title={t('card.merge')} disabled={!!actionId} onClick={e => { e.stopPropagation(); onMerge(candidate); }}><GitMerge size={14}/></InlineActionButton>}
             <InlineActionButton
               variant="primary"
               onClick={(e) => { e.stopPropagation(); onApprove(candidate); }}
               disabled={isProcessing}
-              title="Approve candidate"
+              title={t('card.approve')}
             >
               <Check size={14} className={isProcessing ? 'animate-pulse' : ''} />
             </InlineActionButton>
@@ -578,7 +580,7 @@ function CandidateCard({
               variant="danger"
               onClick={(e) => { e.stopPropagation(); onReject(candidate); }}
               disabled={isProcessing}
-              title="Reject candidate"
+              title={t('card.reject')}
             >
               <XCircle size={14} />
             </InlineActionButton>
@@ -591,6 +593,7 @@ function CandidateCard({
 }
 
 export function CurateRoute() {
+  const t = useT();
   const [searchParams, setSearchParams] = useSearchParams();
   const [token, setToken] = useState('');
   const [vaults, setVaults] = useState<VaultInfo[]>([]);
@@ -631,14 +634,34 @@ export function CurateRoute() {
     try {
       const job = await advisor.ask(ids);
       const skipped = Object.keys(job.skipped || {}).length;
-      setNotice(`Parere AI in corso su ${job.total} candidate (${job.provider}/${job.model})${skipped ? `, ${skipped} saltate` : ''}: i badge si aggiornano appena arriva ogni verdetto.`);
+      setNotice(tr('advice.started', { count: job.total, provider: job.provider, model: job.model })
+        + (skipped ? tr('advice.skipped', { count: skipped }) : ''));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Impossibile avviare il parere AI.');
+      setError(cause instanceof Error ? cause.message : tr('advice.startFailed'));
     }
   }, [advisor]);
   const canAskAdvice = useCallback((candidate: Candidate) => advisorEnabled
     && candidate.source === 'session_synthesis'
     && (candidate.status === 'pending_review' || candidate.status === 'pre_approved'), [advisorEnabled]);
+  const [reviewing, setReviewing] = useState<string[] | null>(null);
+  const [adviceReady, setAdviceReady] = useState(false);
+  const acceptFinished = useCallback((job: AcceptJob) => {
+    const s = job.summary;
+    setNotice(job.status === 'failed'
+      ? tr('accept.batchFailed', { error: job.error || tr('common.unknownError') })
+      : tr('accept.appliedNotice', { done: s?.done ?? 0 })
+        + (s?.stale ? tr('accept.staleNotice', { count: s.stale }) : '')
+        + (s?.error ? tr('accept.errorNotice', { count: s.error }) : ''));
+    notifyCurateStatusChanged();
+    void loadRef.current(true);
+  }, []);
+  const accept = useAcceptJob({ vault: selectedVault, request: mergeRequest, enabled: advisorEnabled, onFinished: acceptFinished });
+  // When a bulk Ask AI finishes, offer the review instead of leaving 80 badges to click through.
+  const advisorWasBusy = useRef(false);
+  useEffect(() => {
+    if (advisor.progress) advisorWasBusy.current = true;
+    else if (advisorWasBusy.current) { advisorWasBusy.current = false; setAdviceReady(true); }
+  }, [advisor.progress]);
 
   useEffect(() => {
     setToken(localStorage.getItem('mission-control-token') || '');
@@ -683,12 +706,15 @@ export function CurateRoute() {
       // Details are opt-in: never open a candidate automatically on load.
       setSelectedId(null);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Curate could not load its data.');
+      setError(cause instanceof Error ? cause.message : tr('load.failed'));
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   }, [selectedVault, token]);
+
+  const loadRef = useRef(load);
+  loadRef.current = load;
 
   const runClassify = useCallback(async () => {
     setClassifying(true);
@@ -698,11 +724,11 @@ export function CurateRoute() {
         '/candidates/classify', token, { method: 'POST' });
       const n = result.classified ?? result.evaluated ?? result.total ?? 0;
       setNotice(result.errors
-        ? `Gate eseguito: ${n} candidate classificate, ${result.errors} errori.`
-        : `Gate eseguito: ${n} candidate classificate dal Jev gate.`);
+        ? tr('gate.doneWithErrors', { count: n, errors: result.errors })
+        : tr('gate.done', { count: n }));
       await load(true);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Classify non disponibile (sidecar offline?).');
+      setError(cause instanceof Error ? cause.message : tr('gate.unavailable'));
     } finally {
       setClassifying(false);
     }
@@ -748,7 +774,7 @@ export function CurateRoute() {
   };
 
   const mergedSuccessfully = (result: MergeResult) => {
-    setNotice(result.status === 'noop' ? `Evidence already present in ${result.note_path}; no note changed.` : `Merged into ${result.note_path}.`);
+    setNotice(result.status === 'noop' ? tr('merge.noopNotice', { path: result.note_path }) : tr('merge.doneNotice', { path: result.note_path }));
     setMerging(null);
     notifyCurateStatusChanged();
     void load(true);
@@ -767,12 +793,12 @@ export function CurateRoute() {
           body: JSON.stringify({ id: candidate.id, vault, ...(reason ? { reason } : {}) }),
         },
       );
-      setNotice(action === 'approve' ? approvalNotice(result.candidate ?? candidate) : 'Candidate rejected.');
+      setNotice(action === 'approve' ? approvalNotice(result.candidate ?? candidate, currentLocale()) : tr('reject.doneNotice'));
       setRejecting(null);
       setRejectReason('');
       await load(true);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : `Could not ${action} candidate.`);
+      setError(cause instanceof Error ? cause.message : tr(action === 'approve' ? 'action.approveFailed' : 'action.rejectFailed'));
     } finally {
       setActionId(null);
     }
@@ -787,10 +813,10 @@ export function CurateRoute() {
         method: 'POST',
         body: JSON.stringify({ id: candidate.id, vault }),
       });
-      setNotice('Auto-reject reverted. The candidate is back in the review queue (and Jev learned it was wrong here).');
+      setNotice(tr('restore.doneNotice'));
       await load(true);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not restore candidate.');
+      setError(cause instanceof Error ? cause.message : tr('restore.failed'));
     } finally {
       setRestoringId(null);
     }
@@ -890,6 +916,11 @@ export function CurateRoute() {
     const clampedPage = statusFilter === 'auto_rejected' ? autoRejectedPage.page : queuePage.page;
     if (currentPage !== clampedPage) setCurrentPage(clampedPage);
   }, [autoRejectedPage.page, currentPage, queuePage.page, statusFilter]);
+  // Bulk Ask AI only targets what the advisor has not answered yet (nor is answering now);
+  // a cron opinion is an older model's and stays askable. Re-asking one card: its detail panel.
+  const askableBulk = visibleCandidates.filter((candidate) => canAskAdvice(candidate)
+    && candidate.curator_source !== 'on_demand' && !advisor.isBusy(candidate.id));
+  const reviewableIds = visibleCandidates.filter((candidate) => canAskAdvice(candidate) && !!candidate.curator_verdict).map((candidate) => candidate.id);
   const pendingCount = candidates.filter((candidate) => candidate.status === 'pending' || candidate.status === 'pending_review' || candidate.status === 'pre_approved').length;
   const approvedCount = candidates.filter((candidate: Candidate) => ['approved', 'promoted', 'applied', 'created', 'merged'].includes(candidate.status)).length;
   const averageConfidence = candidates.length
@@ -903,38 +934,48 @@ export function CurateRoute() {
         <header className="flex flex-col gap-4 border-b border-white/[0.08] pb-5 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-300/80">
-              <Sparkles size={13} /> Candidate review · synthesis + legacy
+              <Brain size={13} /> {t('page.eyebrow')}
             </div>
-            <h1 className="text-2xl font-semibold tracking-tight text-text sm:text-3xl">Curate</h1>
-            <p className="mt-1 max-w-2xl text-sm leading-6 text-text-muted">Review generated concepts before they become durable knowledge. Session-synthesis approvals apply directly to the selected vault; legacy file candidates are quarantined, not yet in the vault.</p>
+            <h1 className="text-2xl font-semibold tracking-tight text-text sm:text-3xl">{t('page.title')}</h1>
+            <p className="mt-1 max-w-2xl text-sm leading-6 text-text-muted">{t('page.subtitle')}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {advisor.advisor?.configured && <Button variant="secondary" onClick={() => void askAdvice(visibleCandidates.filter(canAskAdvice))}
-              disabled={!!advisor.progress || !visibleCandidates.some(canAskAdvice)}
-              title={`Chiede approve / merge / reject per ogni candidata pending visibile (${advisor.advisor.provider}/${advisor.advisor.model})`} className="px-3 text-sm">
+            {advisor.advisor?.configured && <Button variant="secondary" onClick={() => void askAdvice(askableBulk)}
+              disabled={!!advisor.progress || !askableBulk.length}
+              title={askableBulk.length ? t('askAi.title', { count: askableBulk.length, provider: advisor.advisor.provider ?? '', model: advisor.advisor.model ?? '' }) : t('askAi.allAnswered')} className="px-3 text-sm">
               {advisor.progress ? <Loader2 size={15} className="animate-spin" /> : <Brain size={15} />}
-              <span className="hidden sm:inline">{advisor.progress ? `AI ${advisor.progress.completed}/${advisor.progress.total}` : `Ask AI (${visibleCandidates.filter(canAskAdvice).length})`}</span>
-              <span className="sm:hidden">AI</span>
+              <span className="hidden sm:inline">{advisor.progress ? t('askAi.progress', { done: advisor.progress.completed, total: advisor.progress.total }) : t('askAi.label', { count: askableBulk.length })}</span>
+              <span className="sm:hidden">{advisor.progress ? `${advisor.progress.completed}/${advisor.progress.total}` : t('askAi.short', { count: askableBulk.length })}</span>
             </Button>}
-            <Button variant="secondary" onClick={() => void runClassify()} disabled={classifying || refreshing} title="Esegue il Jev gate sulle candidate pending (idempotente, verdict-only)" className="px-3 text-sm">
-              <Sparkles size={15} className={classifying ? 'animate-spin' : ''} /> <span className="hidden sm:inline">{classifying ? 'Classifying…' : 'Run Jev gate'}</span><span className="sm:hidden">Gate</span>
+            {(reviewableIds.length > 0 || accept.running) && <Button variant={adviceReady ? 'primary' : 'secondary'} onClick={() => { setAdviceReady(false); setReviewing(reviewableIds); }}
+              disabled={!!advisor.progress} title={t('review.title')} className="px-3 text-sm">
+              {accept.running ? <Loader2 size={15} className="animate-spin" /> : <ClipboardCheck size={15} />}
+              <span className="hidden sm:inline">{accept.progress ? t('review.applying', { done: accept.progress.completed, total: accept.progress.total }) : t('review.label', { count: reviewableIds.length })}</span>
+              <span className="sm:hidden">{accept.progress ? `${accept.progress.completed}/${accept.progress.total}` : t('review.short', { count: reviewableIds.length })}</span>
+            </Button>}
+            <Button variant="secondary" onClick={() => void runClassify()} disabled={classifying || refreshing} title={t('gate.title')} className="px-3 text-sm">
+              <Sparkles size={15} className={classifying ? 'animate-spin' : ''} /> <span className="hidden sm:inline">{classifying ? t('gate.running') : t('gate.run')}</span><span className="sm:hidden">{t('gate.short')}</span>
             </Button>
             <Button variant="secondary" onClick={() => void load(true)} disabled={refreshing}>
-              <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} /> Refresh
+              <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} /> {t('common.refresh')}
             </Button>
           </div>
         </header>
 
-        {advisor.failures.length > 0 && <div className="flex items-start gap-3 rounded-2xl border border-rose-400/25 bg-rose-400/10 p-3 text-sm text-rose-200"><XCircle size={17} className="mt-0.5 shrink-0" /><span>Parere AI fallito: {advisor.failures[advisor.failures.length - 1]}</span></div>}
+        {adviceReady && reviewableIds.length > 0 && !reviewing && <div className="flex flex-col gap-3 rounded-2xl border border-sky-400/25 bg-sky-400/10 p-3 text-sm text-sky-100 sm:flex-row sm:items-center sm:justify-between">
+          <span className="flex items-start gap-2"><Brain size={17} className="mt-0.5 shrink-0" />{t('ready.text', { count: reviewableIds.length })}</span>
+          <div className="flex shrink-0 gap-2"><Button variant="ghost" onClick={() => setAdviceReady(false)} className="px-3 text-sm">{t('ready.later')}</Button><Button variant="primary" onClick={() => { setAdviceReady(false); setReviewing(reviewableIds); }} className="px-4 text-sm"><ClipboardCheck size={15} /> {t('ready.review')}</Button></div>
+        </div>}
+        {advisor.failures.length > 0 && <div className="flex items-start gap-3 rounded-2xl border border-rose-400/25 bg-rose-400/10 p-3 text-sm text-rose-200"><XCircle size={17} className="mt-0.5 shrink-0" /><span>{t('advice.failed', { error: advisor.failures[advisor.failures.length - 1] })}</span></div>}
         {error && <div className="flex items-start gap-3 rounded-2xl border border-rose-400/25 bg-rose-400/10 p-3 text-sm text-rose-200"><XCircle size={17} className="mt-0.5 shrink-0" /><span>{error}</span></div>}
         {notice && <div className="flex items-center gap-3 rounded-2xl border border-emerald-400/25 bg-emerald-400/10 p-3 text-sm text-emerald-200"><CheckCircle2 size={17} className="shrink-0" /><span>{notice}</span></div>}
 
         <section className="grid grid-cols-2 gap-3 xl:grid-cols-4">
           {[
-            { label: 'Pending review', value: pendingCount, icon: Inbox, tone: 'text-amber-300 bg-amber-400/10' },
-            { label: 'Approved / applied', value: approvedCount, icon: CheckCircle2, tone: 'text-emerald-300 bg-emerald-400/10' },
-            { label: 'In this vault', value: candidates.length, icon: Archive, tone: 'text-sky-300 bg-sky-400/10' },
-            { label: 'Average confidence', value: candidates.length ? `${Math.round(averageConfidence * 100)}%` : '—', icon: ShieldCheck, tone: 'text-violet-300 bg-violet-400/10' },
+            { label: t('stats.pending'), value: pendingCount, icon: Inbox, tone: 'text-amber-300 bg-amber-400/10' },
+            { label: t('stats.approved'), value: approvedCount, icon: CheckCircle2, tone: 'text-emerald-300 bg-emerald-400/10' },
+            { label: t('stats.inVault'), value: candidates.length, icon: Archive, tone: 'text-sky-300 bg-sky-400/10' },
+            { label: t('stats.avgConfidence'), value: candidates.length ? `${Math.round(averageConfidence * 100)}%` : '—', icon: ShieldCheck, tone: 'text-violet-300 bg-violet-400/10' },
           ].map(({ label, value, icon: Icon, tone }) => (
             <div key={label} className="rounded-2xl border border-white/[0.08] bg-white/[0.025] p-4">
               <div className="flex items-center justify-between gap-3"><span className="text-xs text-text-muted">{label}</span><span className={`flex h-8 w-8 items-center justify-center rounded-xl ${tone}`}><Icon size={15} /></span></div>
@@ -944,13 +985,13 @@ export function CurateRoute() {
         </section>
 
         <section className="flex flex-col gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-3 sm:p-4">
-          <div className="flex items-center justify-between gap-3"><div><p className="text-sm font-semibold text-text">Vaults</p><p className="text-xs text-text-muted">Choose the knowledge space to review.</p></div><span className="text-xs text-text-subtle">{currentVault?.mode || 'loading'}</span></div>
+          <div className="flex items-center justify-between gap-3"><div><p className="text-sm font-semibold text-text">{t('vaults.title')}</p><p className="text-xs text-text-muted">{t('vaults.subtitle')}</p></div><span className="text-xs text-text-subtle">{currentVault?.mode || t('common.loading')}</span></div>
           <div className="flex gap-2 overflow-x-auto pb-1">
             {vaults
               .filter((vault: VaultInfo) => vault.candidate_enabled !== false && !vault.error && vault.mode !== 'error')
               .map((vault) => (
               <button key={vault.id} type="button" onClick={() => chooseVault(vault.id)} className={`shrink-0 rounded-xl border px-3 py-2 text-left transition-colors ${selectedVault === vault.id ? 'border-sky-400/40 bg-sky-400/10 text-sky-200' : 'border-white/[0.08] bg-white/[0.025] text-text-muted hover:bg-white/[0.06]'}`}>
-                <span className="block text-sm font-medium">{vault.label}</span><span className="mt-0.5 block text-[11px] text-current/70">{vault.candidate_count} total · {vault.pending_count} pending</span>
+                <span className="block text-sm font-medium">{vault.label}</span><span className="mt-0.5 block text-[11px] text-current/70">{t('vaults.counts', { total: vault.candidate_count, pending: vault.pending_count })}</span>
               </button>
             ))}
           </div>
@@ -962,7 +1003,7 @@ export function CurateRoute() {
             <input
               value={query}
               onChange={(event) => { setQuery(event.target.value); setCurrentPage(1); }}
-              placeholder="Search title, content, tags, or ID…"
+              placeholder={t('search.placeholder')}
               className="h-10 w-full rounded-xl border border-white/[0.08] bg-black/10 pl-9 pr-3 text-sm text-text outline-none placeholder:text-text-subtle focus:border-sky-400/40"
             />
           </label>
@@ -972,27 +1013,27 @@ export function CurateRoute() {
               onChange={(event) => { setStatusFilter(event.target.value as StatusFilter); setCurrentPage(1); }}
               className="h-10 min-w-32 rounded-xl border border-white/[0.08] bg-surface px-3 text-sm text-text outline-none"
             >
-              <option value="all">All status</option>
-              <option value="pending">Pending</option>
-              <option value="pre_approved">Pre-approved</option>
-              <option value="auto_rejected">Auto-rejected</option>
-              <option value="in_vault">In vault</option>
-              <option value="rejected">Rejected</option>
+              <option value="all">{t('filter.all')}</option>
+              <option value="pending">{t('filter.pending')}</option>
+              <option value="pre_approved">{t('filter.preApproved')}</option>
+              <option value="auto_rejected">{t('filter.autoRejected')}</option>
+              <option value="in_vault">{t('filter.inVault')}</option>
+              <option value="rejected">{t('filter.rejected')}</option>
             </select>
             <select
               value={sortMode}
               onChange={(event) => { setSortMode(event.target.value as SortMode); setCurrentPage(1); }}
               className="h-10 min-w-32 rounded-xl border border-white/[0.08] bg-surface px-3 text-sm text-text outline-none"
             >
-              <option value="newest">Newest</option>
-              <option value="oldest">Oldest</option>
-              <option value="confidence">Confidence</option>
+              <option value="newest">{t('sort.newest')}</option>
+              <option value="oldest">{t('sort.oldest')}</option>
+              <option value="confidence">{t('sort.confidence')}</option>
             </select>
           </div>
         </section>
 
         {loading ? (
-          <div className="flex min-h-64 items-center justify-center gap-2 text-sm text-text-muted"><Loader2 size={17} className="animate-spin" /> Loading candidate queue…</div>
+          <div className="flex min-h-64 items-center justify-center gap-2 text-sm text-text-muted"><Loader2 size={17} className="animate-spin" /> {t('queue.loading')}</div>
         ) : (
           <>
           {statusFilter === 'auto_rejected' ? (
@@ -1000,11 +1041,11 @@ export function CurateRoute() {
             <section ref={autoRejectedSectionRef} className="flex min-w-0 flex-col gap-3">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm font-semibold text-text">Auto-rejected by Jev</p>
-                  <p className="text-xs text-text-muted">Automatically filtered at confidence ≥80% with verdict "reject". Every revert is recorded and feeds the classifier feedback loop.</p>
+                  <p className="text-sm font-semibold text-text">{t('autoRejected.title')}</p>
+                  <p className="text-xs text-text-muted">{t('autoRejected.subtitle')}</p>
                 </div>
                 <span className="rounded-full bg-orange-400/10 px-2.5 py-1 text-xs text-orange-300">
-                  {autoRejectedList.length} matching · {autoRejected.length} total
+                  {t('autoRejected.counts', { matching: autoRejectedList.length, total: autoRejected.length })}
                 </span>
               </div>
               {autoRejectedPage.items.length ? autoRejectedPage.items.map((candidate) => (
@@ -1019,10 +1060,10 @@ export function CurateRoute() {
                 <div className="rounded-2xl border border-dashed border-orange-400/20 px-5 py-10 text-center">
                   <Bot size={28} className="mx-auto text-text-subtle" />
                   <p className="mt-3 text-sm font-medium text-text">
-                    {autoRejected.length ? 'No candidates match this search' : 'No auto-rejected candidates'}
+                    {autoRejected.length ? t('autoRejected.noMatch') : t('autoRejected.none')}
                   </p>
                   <p className="mt-1 text-xs text-text-muted">
-                    {autoRejected.length ? 'Try another search term.' : 'The Jev gate has not filtered anything in this vault yet.'}
+                    {autoRejected.length ? t('autoRejected.tryAnother') : t('autoRejected.noneYet')}
                   </p>
                 </div>
               )}
@@ -1032,7 +1073,7 @@ export function CurateRoute() {
                 start={autoRejectedPage.start}
                 end={autoRejectedPage.end}
                 total={autoRejectedPage.total}
-                itemLabel="candidates"
+                itemLabel={t('common.candidates')}
                 onPageChange={changePage}
               />
             </section>
@@ -1040,11 +1081,11 @@ export function CurateRoute() {
           <section ref={queueSectionRef} className="flex min-w-0 flex-col gap-3">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-semibold text-text">Candidate queue</p>
-                <p className="text-xs text-text-muted">{visibleCandidates.length} candidates match · {queueItems.length} review cards</p>
+                <p className="text-sm font-semibold text-text">{t('queue.title')}</p>
+                <p className="text-xs text-text-muted">{t('queue.counts', { matching: visibleCandidates.length, cards: queueItems.length })}</p>
               </div>
               <span className="rounded-full bg-white/[0.06] px-2.5 py-1 text-xs text-text-muted">
-                {statusFilter === 'all' ? 'All candidates' : statusLabel(statusFilter)}
+                {statusFilter === 'all' ? t('queue.all') : statusLabel(statusFilter)}
               </span>
             </div>
             {queuePage.items.map((item) => item.kind === 'cluster' ? (
@@ -1080,14 +1121,14 @@ export function CurateRoute() {
                 onAsk={canAskAdvice(item.candidate) ? (candidate) => void askAdvice([candidate]) : undefined}
               />
             ))}
-            {!queueItems.length && <div className="rounded-2xl border border-dashed border-white/10 px-5 py-12 text-center"><ClipboardCheck size={28} className="mx-auto text-text-subtle" /><p className="mt-3 text-sm font-medium text-text">No candidates match</p><p className="mt-1 text-xs text-text-muted">Try another status, vault, or search term.</p></div>}
+            {!queueItems.length && <div className="rounded-2xl border border-dashed border-white/10 px-5 py-12 text-center"><ClipboardCheck size={28} className="mx-auto text-text-subtle" /><p className="mt-3 text-sm font-medium text-text">{t('queue.noMatch')}</p><p className="mt-1 text-xs text-text-muted">{t('queue.tryAnother')}</p></div>}
             <PaginationControls
               page={queuePage.page}
               pageCount={queuePage.pageCount}
               start={queuePage.start}
               end={queuePage.end}
               total={queuePage.total}
-              itemLabel="cards"
+              itemLabel={t('common.cards')}
               onPageChange={changePage}
             />
           </section>
@@ -1104,9 +1145,12 @@ export function CurateRoute() {
         </div>
       </div>}
 
+      {reviewing && <AcceptReview vault={selectedVault} candidateIds={reviewing} request={mergeRequest} accept={accept}
+        onClose={() => setReviewing(null)} onOpenCandidate={(id) => { setReviewing(null); setSelectedId(id); }} onChanged={() => void load(true)} />}
+
       {merging && <MergeDialog key={`${merging.vault_id}:${merging.id}`} candidate={merging} request={mergeRequest} onCancel={() => setMerging(null)} onSuccess={mergedSuccessfully}/>}
 
-      {rejecting && <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 sm:items-center"><form onSubmit={(event) => { event.preventDefault(); void performAction(rejecting, 'reject', rejectReason.trim()); }} className="w-full max-w-lg rounded-2xl border border-white/10 bg-surface p-5 shadow-2xl"><div className="flex items-start justify-between gap-4"><div><p className="text-base font-semibold text-text">Reject candidate</p><p className="mt-1 text-sm text-text-muted">Give the nightly brain useful feedback for the next run.</p></div><button type="button" onClick={() => setRejecting(null)} className="rounded-lg p-1 text-text-muted hover:bg-white/[0.06] hover:text-text"><X size={18} /></button></div><textarea autoFocus value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} placeholder="Why should this candidate be rejected?" className="mt-4 min-h-28 w-full resize-y rounded-xl border border-white/10 bg-black/10 p-3 text-sm text-text outline-none placeholder:text-text-subtle focus:border-rose-400/40" /><div className="mt-4 flex justify-end gap-2"><Button variant="ghost" onClick={() => setRejecting(null)}>Cancel</Button><Button type="submit" variant="danger" disabled={!rejectReason.trim() || actionId === rejecting.id}>{actionId === rejecting.id && <Loader2 size={15} className="animate-spin" />} Reject candidate</Button></div></form></div>}
+      {rejecting && <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 sm:items-center"><form onSubmit={(event) => { event.preventDefault(); void performAction(rejecting, 'reject', rejectReason.trim()); }} className="w-full max-w-lg rounded-2xl border border-white/10 bg-surface p-5 shadow-2xl"><div className="flex items-start justify-between gap-4"><div><p className="text-base font-semibold text-text">{t('reject.title')}</p><p className="mt-1 text-sm text-text-muted">{t('reject.subtitle')}</p></div><button type="button" onClick={() => setRejecting(null)} className="rounded-lg p-1 text-text-muted hover:bg-white/[0.06] hover:text-text"><X size={18} /></button></div><textarea autoFocus value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} placeholder={t('reject.placeholder')} className="mt-4 min-h-28 w-full resize-y rounded-xl border border-white/10 bg-black/10 p-3 text-sm text-text outline-none placeholder:text-text-subtle focus:border-rose-400/40" /><div className="mt-4 flex justify-end gap-2"><Button variant="ghost" onClick={() => setRejecting(null)}>{t('common.cancel')}</Button><Button type="submit" variant="danger" disabled={!rejectReason.trim() || actionId === rejecting.id}>{actionId === rejecting.id && <Loader2 size={15} className="animate-spin" />} {t('reject.title')}</Button></div></form></div>}
     </div>
   );
 }
@@ -1138,30 +1182,31 @@ function CandidateDetail({
   const sourceNodeIds = candidate.sourceNodeIds || [];
   const isPending = candidate.status === 'pending' || candidate.status === 'pending_review' || candidate.status === 'pre_approved';
   const fullBody = candidate.body?.trim() || candidate.description?.trim() || '';
+  const t = useT();
 
   return <div className="flex max-h-[92vh] min-h-0 flex-col">
-    <div className="flex items-start justify-between gap-4 border-b border-white/[0.08] p-5"><div className="min-w-0"><div className="flex items-center gap-2"><span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ${statusTone(candidate.status)}`}>{statusLabel(candidate.status)}</span>{candidate.type && <span className="text-[11px] uppercase tracking-[0.12em] text-text-subtle">{candidate.type}</span>}</div><h2 id="curate-candidate-title" className="mt-3 truncate text-xl font-semibold tracking-tight text-text">{candidate.title || candidate.id}</h2><p className="mt-2 break-all font-mono text-[10px] text-text-subtle">{candidate.id}</p></div><button type="button" aria-label="Close candidate details" onClick={onClose} className="rounded-xl p-2 text-text-muted hover:bg-white/[0.06] hover:text-text"><X size={19} /></button></div>
+    <div className="flex items-start justify-between gap-4 border-b border-white/[0.08] p-5"><div className="min-w-0"><div className="flex items-center gap-2"><span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ${statusTone(candidate.status)}`}>{statusLabel(candidate.status)}</span>{candidate.type && <span className="text-[11px] uppercase tracking-[0.12em] text-text-subtle">{candidate.type}</span>}</div><h2 id="curate-candidate-title" className="mt-3 truncate text-xl font-semibold tracking-tight text-text">{candidate.title || candidate.id}</h2><p className="mt-2 break-all font-mono text-[10px] text-text-subtle">{candidate.id}</p></div><button type="button" aria-label={t('detail.closeAria')} onClick={onClose} className="rounded-xl p-2 text-text-muted hover:bg-white/[0.06] hover:text-text"><X size={19} /></button></div>
     <div className="min-h-0 overflow-y-auto p-5"><div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-<Meta label="Created" value={formatDate(candidate.created)} />
-<Meta label="Confidence" value={confidenceLabel(candidate) ?? '—'} />
+<Meta label={t('detail.created')} value={formatDate(candidate.created)} />
+<Meta label={t('detail.confidence')} value={confidenceLabel(candidate) ?? '—'} />
 {(candidate.status === 'pending_review' || candidate.status === 'pending' || candidate.status === 'pre_approved') ? (<>
-<Meta label="Jev verdict" value={candidate.jev_choice ? `${candidate.jev_choice} · ${candidate.jev_confidence ? Math.round(Number(candidate.jev_confidence) * 100) + '%' : ''}` : 'not classified yet'} />
-<Meta label="Pipeline" value="Awaiting your review" />
+<Meta label={t('detail.jevVerdict')} value={candidate.jev_choice ? `${candidate.jev_choice} · ${candidate.jev_confidence ? Math.round(Number(candidate.jev_confidence) * 100) + '%' : ''}` : t('detail.notClassified')} />
+<Meta label={t('detail.pipeline')} value={t('detail.awaiting')} />
 </>) : IN_VAULT_STATUSES.has(candidate.status) ? (<>
-<Meta label="In vault" value={formatDate(candidate.promoted_at || candidate.created)} />
-<Meta label="Jev verdict" value={candidate.jev_choice ? `${candidate.jev_choice} · ${candidate.jev_confidence ? Math.round(Number(candidate.jev_confidence) * 100) + '%' : ''}` : candidate.status === 'applied' ? 'pre-gate era' : 'human decision'} />
+<Meta label={t('detail.inVault')} value={formatDate(candidate.promoted_at || candidate.created)} />
+<Meta label={t('detail.jevVerdict')} value={candidate.jev_choice ? `${candidate.jev_choice} · ${candidate.jev_confidence ? Math.round(Number(candidate.jev_confidence) * 100) + '%' : ''}` : candidate.status === 'applied' ? t('detail.preGate') : t('detail.human')} />
 </>) : candidate.status === 'rejected' ? (<>
-<Meta label="Rejected" value={formatDate(candidate.rejected_at)} />
-<Meta label="Jev verdict" value={candidate.jev_choice ? candidate.jev_choice : 'human decision'} />
+<Meta label={t('detail.rejected')} value={formatDate(candidate.rejected_at)} />
+<Meta label={t('detail.jevVerdict')} value={candidate.jev_choice ? candidate.jev_choice : t('detail.human')} />
 </>) : candidate.status === 'auto_rejected' ? (<>
-<Meta label="Auto-rejected" value={formatDate(candidate.auto_rejected_at)} />
-<Meta label="Jev confidence" value={candidate.jev_confidence ? Math.round(Number(candidate.jev_confidence) * 100) + '%' : '—'} />
+<Meta label={t('detail.autoRejected')} value={formatDate(candidate.auto_rejected_at)} />
+<Meta label={t('detail.jevConfidence')} value={candidate.jev_confidence ? Math.round(Number(candidate.jev_confidence) * 100) + '%' : '—'} />
 </>) : (<>
-{candidate.approved_at && <Meta label="Approved" value={formatDate(candidate.approved_at)} />}
-{candidate.quarantine_until && <Meta label="Quarantine until" value={formatDate(candidate.quarantine_until)} />}
+{candidate.approved_at && <Meta label={t('detail.approved')} value={formatDate(candidate.approved_at)} />}
+{candidate.quarantine_until && <Meta label={t('detail.quarantine')} value={formatDate(candidate.quarantine_until)} />}
 </>)}
-</div>{(candidate.curator_verdict || canAsk) && <CuratorAdvicePanel fields={candidate} live={live} canAsk={canAsk && !!onAsk} onAsk={() => onAsk?.(candidate)} />}<div className="mt-5"><p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-subtle">Candidate body</p>{fullBody ? <article className="max-h-[32vh] overflow-y-auto rounded-xl border border-white/[0.08] bg-black/10 p-3"><CandidateMarkdown content={fullBody} /></article> : <div className="rounded-xl border border-dashed border-amber-400/25 bg-amber-400/[0.06] p-3 text-sm leading-6 text-amber-100/80">This candidate contains metadata only. The semantic description is available in the source notes below.</div>}</div>{candidate.sourceNotes?.length ? <div className="mt-5"><p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-subtle">Evidence from source notes</p><div className="space-y-3">{candidate.sourceNotes.map((note) => <section key={note.source} className="rounded-xl border border-white/[0.08] bg-black/10 p-3"><div className="flex items-center justify-between gap-3"><p className="text-sm font-medium text-text">{note.title}</p><span className={`text-[10px] uppercase tracking-[0.12em] ${note.match_type === 'related' ? 'text-amber-300' : note.found ? 'text-emerald-300' : 'text-text-subtle'}`}>{note.match_type === 'related' ? 'related' : note.found ? 'found' : 'missing'}</span></div>{note.found && <p className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap text-xs leading-5 text-text-muted">{note.body}</p>}</section>)}</div></div> : null}{sourceNodeIds.length > 0 && <div className="mt-5"><div className="mb-2"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-subtle">Source nodes ({sourceNodeIds.length})</p><p className="mt-1 text-xs leading-5 text-text-muted">BDH graph nodes activated as evidence/context for this synthesis. They are not notes created by the candidate; older nodes are expected.</p></div><div className="space-y-1.5">{sourceNodeIds.map((nodeId) => <code key={nodeId} title={nodeId} className="block break-all rounded-lg border border-sky-400/15 bg-sky-400/[0.06] px-2.5 py-2 text-[11px] leading-5 text-sky-200">{nodeId}</code>)}</div></div>}{tags.length > 0 && <DetailList label="Tags" items={tags} tone="sky" />}{sources.length > 0 && <DetailList label="Source notes (summary)" items={sources} tone="neutral" />}{candidate.rejection_reason && <div className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 p-3"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-rose-300">Rejection feedback</p><p className="mt-2 text-sm leading-5 text-rose-100/80">{candidate.rejection_reason}</p></div>}</div>
-    <div className="flex justify-end gap-2 border-t border-white/[0.08] p-4"><Button variant="ghost" onClick={onClose}>Close</Button>{onMerge && isPending && candidate.source === 'session_synthesis' && <Button variant="secondary" disabled={!!actionId} onClick={() => onMerge(candidate)} title="Merge candidate into existing vault note"><GitMerge size={15}/> Merge into…</Button>}{isPending && <><Button variant="danger" onClick={() => onReject(candidate)} disabled={actionId === candidate.id}><XCircle size={15} /> Reject</Button><Button variant="primary" onClick={() => onApprove(candidate)} disabled={actionId === candidate.id}>{actionId === candidate.id ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} Approve candidate</Button></>}</div>
+</div>{(candidate.curator_verdict || canAsk) && <CuratorAdvicePanel fields={candidate} live={live} canAsk={canAsk && !!onAsk} onAsk={() => onAsk?.(candidate)} />}<div className="mt-5"><p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-subtle">{t('detail.body')}</p>{fullBody ? <article className="max-h-[32vh] overflow-y-auto rounded-xl border border-white/[0.08] bg-black/10 p-3"><CandidateMarkdown content={fullBody} /></article> : <div className="rounded-xl border border-dashed border-amber-400/25 bg-amber-400/[0.06] p-3 text-sm leading-6 text-amber-100/80">{t('detail.metadataOnly')}</div>}</div>{candidate.sourceNotes?.length ? <div className="mt-5"><p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-subtle">{t('detail.evidence')}</p><div className="space-y-3">{candidate.sourceNotes.map((note) => <section key={note.source} className="rounded-xl border border-white/[0.08] bg-black/10 p-3"><div className="flex items-center justify-between gap-3"><p className="text-sm font-medium text-text">{note.title}</p><span className={`text-[10px] uppercase tracking-[0.12em] ${note.match_type === 'related' ? 'text-amber-300' : note.found ? 'text-emerald-300' : 'text-text-subtle'}`}>{note.match_type === 'related' ? t('detail.related') : note.found ? t('detail.found') : t('detail.missing')}</span></div>{note.found && <p className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap text-xs leading-5 text-text-muted">{note.body}</p>}</section>)}</div></div> : null}{sourceNodeIds.length > 0 && <div className="mt-5"><div className="mb-2"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-subtle">{t('detail.sourceNodes', { count: sourceNodeIds.length })}</p><p className="mt-1 text-xs leading-5 text-text-muted">{t('detail.sourceNodesHint')}</p></div><div className="space-y-1.5">{sourceNodeIds.map((nodeId) => <code key={nodeId} title={nodeId} className="block break-all rounded-lg border border-sky-400/15 bg-sky-400/[0.06] px-2.5 py-2 text-[11px] leading-5 text-sky-200">{nodeId}</code>)}</div></div>}{tags.length > 0 && <DetailList label={t('detail.tags')} items={tags} tone="sky" />}{sources.length > 0 && <DetailList label={t('detail.sourcesSummary')} items={sources} tone="neutral" />}{candidate.rejection_reason && <div className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 p-3"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-rose-300">{t('detail.rejectionFeedback')}</p><p className="mt-2 text-sm leading-5 text-rose-100/80">{candidate.rejection_reason}</p></div>}</div>
+    <div className="flex justify-end gap-2 border-t border-white/[0.08] p-4"><Button variant="ghost" onClick={onClose}>{t('common.close')}</Button>{onMerge && isPending && candidate.source === 'session_synthesis' && <Button variant="secondary" disabled={!!actionId} onClick={() => onMerge(candidate)} title={t('detail.mergeTitle')}><GitMerge size={15}/> {t('detail.mergeInto')}</Button>}{isPending && <><Button variant="danger" onClick={() => onReject(candidate)} disabled={actionId === candidate.id}><XCircle size={15} /> {t('detail.reject')}</Button><Button variant="primary" onClick={() => onApprove(candidate)} disabled={actionId === candidate.id}>{actionId === candidate.id ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} {t('detail.approve')}</Button></>}</div>
   </div>;
 }
 

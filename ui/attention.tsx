@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Bell, ListChecks, Loader2 } from 'lucide-react';
+import { tr, useT } from './i18n';
 interface MCPluginAttentionProps {
   onActiveChange: (count: number) => void;
 }
@@ -17,11 +18,12 @@ async function getJSON<T>(path: string, token: string): Promise<T> {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     cache: 'no-store',
   });
-  if (!response.ok) throw new Error(`Curate attention unavailable (${response.status})`);
+  if (!response.ok) throw new Error(tr('attention.unavailable', { status: response.status }));
   return response.json() as Promise<T>;
 }
 
 export function CurateAttention({ onActiveChange }: MCPluginAttentionProps) {
+  const t = useT();
   const [token, setToken] = useState('');
   const [pending, setPending] = useState(0);
   const [byVault, setByVault] = useState<Array<{ id: string; label: string; count: number }>>([]);
@@ -63,7 +65,7 @@ export function CurateAttention({ onActiveChange }: MCPluginAttentionProps) {
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [onActiveChange, token]);
 
-  if (loading) return <div className="flex items-center gap-2 text-xs text-text-muted"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading plugin attention…</div>;
+  if (loading) return <div className="flex items-center gap-2 text-xs text-text-muted"><Loader2 className="h-3.5 w-3.5 animate-spin" /> {t('attention.loading')}</div>;
   if (pending === 0) return null;
 
   const href = byVault.length === 1 ? `/curate?vault=${encodeURIComponent(byVault[0].id)}` : '/curate';
@@ -74,11 +76,11 @@ export function CurateAttention({ onActiveChange }: MCPluginAttentionProps) {
       <Bell className="h-4 w-4 flex-shrink-0 text-warning mt-0.5" />
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium text-text">Curate</p>
-        <p className="mt-0.5 line-clamp-2 text-xs text-text-muted">{pending} candidate{pending === 1 ? '' : 's'} need review{detail}</p>
+        <p className="mt-0.5 line-clamp-2 text-xs text-text-muted">{t('attention.need', { count: pending, detail })}</p>
       </div>
-      <a href={href} className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--control-radius)] border border-warning/30 text-warning transition-colors hover:bg-warning/10 sm:h-auto sm:w-auto sm:gap-1 sm:px-2 sm:py-1 sm:text-xs" aria-label="Review Curate candidates" title="Review Curate candidates">
+      <a href={href} className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--control-radius)] border border-warning/30 text-warning transition-colors hover:bg-warning/10 sm:h-auto sm:w-auto sm:gap-1 sm:px-2 sm:py-1 sm:text-xs" aria-label={t('attention.reviewAria')} title={t('attention.reviewAria')}>
         <ListChecks aria-hidden="true" className="h-4 w-4 sm:h-3 sm:w-3" />
-        <span className="hidden sm:inline">Review</span>
+        <span className="hidden sm:inline">{t('attention.review')}</span>
       </a>
     </div>
   );

@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Brain, Loader2 } from 'lucide-react';
+import { currentLocale, tr, useT, type Translate } from './i18n';
+import type { MessageKey } from './messages';
 
 /**
  * Curate AI advisor — live approve / merge / reject opinions.
@@ -95,7 +97,7 @@ export function useCuratorAdvisor({ vault, request, enabled, onAdvice }: {
         setAdvisor(data.advisor);
         setJobs(Object.fromEntries((data.jobs || []).map((job) => [job.job_id, job])));
       })
-      .catch(() => { if (!cancelled) setAdvisor({ configured: false, detail: 'Advisor endpoint unavailable.' }); });
+      .catch(() => { if (!cancelled) setAdvisor({ configured: false, detail: tr('advisor.unavailable') }); });
     return () => { cancelled = true; };
   }, [enabled, request, vault]);
 
@@ -173,29 +175,34 @@ function targetLabel(target?: string | null, title?: string | null): string {
   return target.split('/').pop()?.replace(/\.md$/, '') || target;
 }
 
-function sourceLabel(fields: CuratorFields): string {
-  return fields.curator_source === 'on_demand' ? 'on demand' : 'scheduled curator review';
+function sourceLabel(fields: CuratorFields, t: Translate): string {
+  return fields.curator_source === 'on_demand' ? t('advisor.onDemand') : t('advisor.scheduled');
+}
+
+export function verdictLabel(verdict: string, t: Translate): string {
+  return ['approve', 'merge', 'reject'].includes(verdict) ? t(`verdict.${verdict}` as MessageKey) : verdict;
 }
 
 /** Compact verdict pill for cards. Live state (queued/running/error) wins over the persisted opinion. */
 export function CuratorBadge({ fields, live }: { fields: CuratorFields; live?: AdviceItem }) {
+  const t = useT();
   if (isBusy(live)) {
     return <span className="inline-flex items-center gap-1 rounded-md border border-violet-400/30 bg-violet-400/10 px-1.5 py-0.5 text-[10px] font-medium text-violet-200" data-curator-badge="busy">
-      <Loader2 size={10} className="animate-spin" /> AI {live?.state === 'queued' ? 'queued' : 'thinking…'}
+      <Loader2 size={10} className="animate-spin" /> {live?.state === 'queued' ? t('advisor.queued') : t('advisor.thinkingBadge')}
     </span>;
   }
   if (live?.state === 'error') {
-    return <span title={live.error} className="rounded-md border border-rose-400/30 bg-rose-400/10 px-1.5 py-0.5 text-[10px] font-medium text-rose-200" data-curator-badge="error">AI error</span>;
+    return <span title={live.error} className="rounded-md border border-rose-400/30 bg-rose-400/10 px-1.5 py-0.5 text-[10px] font-medium text-rose-200" data-curator-badge="error">{t('advisor.errorBadge')}</span>;
   }
   const verdict = fields.curator_verdict;
   if (!verdict) return null;
   const confidence = fields.curator_confidence !== undefined && fields.curator_confidence !== '' ? Number(fields.curator_confidence) : null;
   const target = verdict === 'merge' ? targetLabel(fields.curator_merge_target) : '';
-  const tooltip = [fields.curator_note, `${sourceLabel(fields)}${fields.curator_model ? ` · ${fields.curator_model}` : ''}`].filter(Boolean).join('\n');
+  const tooltip = [fields.curator_note, `${sourceLabel(fields, t)}${fields.curator_model ? ` · ${fields.curator_model}` : ''}`].filter(Boolean).join('\n');
   return <span title={tooltip} data-curator-badge={verdict}
     className={`inline-flex max-w-[260px] items-center gap-1 truncate rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${VERDICT_TONE[verdict] || 'border-white/10 bg-white/[0.04] text-text-muted'}`}>
     <Brain size={10} className="shrink-0" />
-    <span className="truncate">AI: {verdict}{target ? ` → ${target}` : ''}{confidence !== null && Number.isFinite(confidence) ? ` ${Math.round(confidence * 100)}%` : ''}</span>
+    <span className="truncate">{t('advisor.badge', { verdict: verdictLabel(verdict, t) })}{target ? ` → ${target}` : ''}{confidence !== null && Number.isFinite(confidence) ? ` ${Math.round(confidence * 100)}%` : ''}</span>
   </span>;
 }
 
@@ -206,27 +213,28 @@ export function CuratorAdvicePanel({ fields, live, canAsk, onAsk }: {
   canAsk: boolean;
   onAsk: () => void;
 }) {
+  const t = useT();
   const busy = isBusy(live);
   const verdict = fields.curator_verdict;
   return <div className="mt-5 rounded-xl border border-violet-400/20 bg-violet-400/[0.05] p-3" data-curator-panel>
     <div className="flex items-center justify-between gap-3">
-      <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-violet-200/80"><Brain size={12} /> Curator opinion</p>
+      <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-violet-200/80"><Brain size={12} /> {t('advisor.panelTitle')}</p>
       {canAsk && <button type="button" disabled={busy} onClick={onAsk}
         className="inline-flex items-center gap-1.5 rounded-lg border border-violet-400/30 bg-violet-400/10 px-2.5 py-1 text-xs font-medium text-violet-100 hover:bg-violet-400/20 disabled:cursor-not-allowed disabled:opacity-50">
-        {busy ? <Loader2 size={12} className="animate-spin" /> : <Brain size={12} />} {busy ? 'Thinking…' : verdict ? 'Ask again' : 'Ask AI'}
+        {busy ? <Loader2 size={12} className="animate-spin" /> : <Brain size={12} />} {busy ? t('advisor.thinking') : verdict ? t('advisor.askAgain') : t('advisor.ask')}
       </button>}
     </div>
-    {busy ? <p className="mt-2 text-xs text-text-muted">Reading the closest notes in this vault and weighing approve / merge / reject…</p>
+    {busy ? <p className="mt-2 text-xs text-text-muted">{t('advisor.reading')}</p>
       : live?.state === 'error' ? <p className="mt-2 text-xs text-rose-200">{live.error}</p>
       : verdict ? <div className="mt-2 space-y-1.5">
         <CuratorBadge fields={fields} />
-        {verdict === 'merge' && fields.curator_merge_target && <p className="break-all text-xs text-sky-200">Target: {fields.curator_merge_target}</p>}
+        {verdict === 'merge' && fields.curator_merge_target && <p className="break-all text-xs text-sky-200">{t('advisor.target', { target: fields.curator_merge_target })}</p>}
         {fields.curator_note && <p className="text-sm leading-6 text-text">{fields.curator_note}</p>}
         <p className="text-[11px] text-text-subtle">
-          {sourceLabel(fields)}{fields.curator_model ? ` · ${fields.curator_model}` : ''}{fields.curator_reviewed_at ? ` · ${new Date(fields.curator_reviewed_at).toLocaleString()}` : ''}
-          {live?.context_mode === 'title_fallback' ? ' · semantic search unavailable, compared by title only' : ''}
+          {sourceLabel(fields, t)}{fields.curator_model ? ` · ${fields.curator_model}` : ''}{fields.curator_reviewed_at ? ` · ${new Date(fields.curator_reviewed_at).toLocaleString(currentLocale() === 'it' ? 'it-IT' : 'en-US')}` : ''}
+          {live?.context_mode === 'title_fallback' ? t('advisor.titleFallback') : ''}
         </p>
       </div>
-      : <p className="mt-2 text-xs text-text-muted">No opinion yet. Ask for a recommendation: approve, merge into an existing note, or reject.</p>}
+      : <p className="mt-2 text-xs text-text-muted">{t('advisor.none')}</p>}
   </div>;
 }

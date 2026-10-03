@@ -83,13 +83,36 @@ def similar_pending(candidate: Mapping[str, Any], pending: Iterable[Mapping[str,
     return [other for _, _, other in scored[:limit]]
 
 
+def overlay_rejections(candidates: Iterable[Mapping[str, Any]], ledger: Mapping[str, Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    """Apply Curate's local rejection ledger to raw BDH candidate files.
+
+    A Curate reject is recorded only in ``session-synthesis-rejections.jsonl``;
+    BDH keeps the file at ``pending_review``. Without this overlay the advisor
+    would treat Albi's rejections as open siblings and never see their reasons.
+    """
+    out = []
+    for raw in candidates:
+        entry = ledger.get(str(raw.get("candidate_id") or ""))
+        if entry is None:
+            out.append(dict(raw))
+            continue
+        out.append({**raw, "status": "rejected", "rejection_reason": str(entry.get("reason") or ""),
+                    "rejected_at": str(entry.get("rejected_at") or ""),
+                    "decided_via": str(entry.get("decided_via") or "")})
+    return out
+
+
 def precedent_of(raw: Mapping[str, Any]) -> Optional[Dict[str, str]]:
     """Turn one reviewed candidate into a decision by Albi worth showing, or None.
 
     Kept: approvals that overruled a curator ``reject``, rejections that overruled a
     curator ``approve``, and every rejection with a content reason. Plain agreements
-    and pre-gate auto-applies carry no information about Albi's bar and are skipped.
+    and pre-gate auto-applies carry no information about Albi's bar and are skipped,
+    and so is every decision taken by accepting an AI suggestion: its reason is the
+    model's own, and learning from it would make the advisor cite itself.
     """
+    if raw.get("decided_via") == "ai_accepted" or _extra(raw).get("decided_via") == "ai_accepted":
+        return None
     status = str(raw.get("status") or "")
     extra = _extra(raw)
     curator = str(extra.get("curator_verdict") or "")

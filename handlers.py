@@ -812,7 +812,8 @@ def approve(cid: str, vault: Optional[str] = None, filename: Optional[str] = Non
     return _read_candidate(p)
 
 
-def reject(cid: str, reason: str = "", vault: Optional[str] = None, filename: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def reject(cid: str, reason: str = "", vault: Optional[str] = None, filename: Optional[str] = None,
+           decided_via: str = "") -> Optional[Dict[str, Any]]:
     """Reject a BDH session candidate into local Curate feedback, or legacy file."""
     candidate, proxy = _load_session_synthesis_candidate(cid, vault)
     if candidate is not None and proxy is not None:
@@ -826,6 +827,7 @@ def reject(cid: str, reason: str = "", vault: Optional[str] = None, filename: Op
             session_id=str(candidate.get("session_id") or ""),
             title=str(candidate.get("title") or ""),
             reason=reason,
+            **({"decided_via": decided_via} if decided_via else {}),
         )
         result = dict(candidate)
         result["status"] = "rejected"

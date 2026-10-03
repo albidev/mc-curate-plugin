@@ -8,7 +8,7 @@ export const curateManifest: MCPluginManifest = {
   navItem: {
     to: '/curate',
     label: 'nav.curate',
-    icon: 'ClipboardCheck',
+    icon: 'Brain',
     order: 60,
     indicator: {
       endpoint: '/curate/status',

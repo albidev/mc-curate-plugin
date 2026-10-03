@@ -317,3 +317,31 @@ def activeAdvice(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any =
     import advisor_jobs
     vault = (params.get("vault") or [""])[0]
     return {**advisor_jobs.active(vault), "advisor": advisor_jobs.config_summary(vault)}
+
+
+# ---------------------------------------------------------------------------
+# Accept AI suggestions in bulk (review panel -> one background job)
+# ---------------------------------------------------------------------------
+
+def planAccept(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any = None) -> Dict[str, Any]:
+    """POST /api/local/curate/accept/plan {vault, candidate_ids} — rows + merge previews, read-only."""
+    import accept_jobs
+    return accept_jobs.plan(body.get("vault"), body.get("candidate_ids"))
+
+
+def startAccept(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any = None) -> Dict[str, Any]:
+    """POST /api/local/curate/accept {vault, items} — apply the ticked rows as one job."""
+    import accept_jobs
+    return accept_jobs.start(body.get("vault"), body.get("items"))
+
+
+def acceptStatus(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any = None) -> Dict[str, Any]:
+    """GET /api/local/curate/accept/status?job= — live per-row state."""
+    import accept_jobs
+    return accept_jobs.status((params.get("job") or [""])[0])
+
+
+def activeAccept(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any = None) -> Dict[str, Any]:
+    """GET /api/local/curate/accept/active?vault= — a reload re-attaches to a running batch."""
+    import accept_jobs
+    return accept_jobs.active((params.get("vault") or [""])[0])

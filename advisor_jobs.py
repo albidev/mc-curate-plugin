@@ -97,6 +97,15 @@ def advisor_config(vault: str) -> Dict[str, Any]:
             "hermes_bin": str(root.get("hermes_bin") or "").strip()}
 
 
+def rejection_ledger(vault: str) -> Dict[str, Dict[str, Any]]:
+    """Curate's local rejections for one vault, keyed by candidate id."""
+    import bdh_rejections
+
+    return {str(e.get("candidate_id")): {k: e.get(k) for k in ("reason", "rejected_at", "decided_via") if e.get(k)}
+            for e in bdh_rejections.list_rejections() or []
+            if isinstance(e, dict) and e.get("candidate_id") and str(e.get("vault_id") or "") == vault}
+
+
 def _bdh_vault_root(vault: str) -> Path:
     import bdh_client
 
@@ -225,11 +234,14 @@ def start(vault: Any, candidate_ids: Any) -> Dict[str, Any]:
 
     in_flight = {cid for job in _active_jobs(vault_id) for cid, item in (job.get("items") or {}).items()
                  if item.get("state") in _ACTIVE}
+    rejections = rejection_ledger(vault_id)
     order, skipped = [], {}
     for cid in ids:
         raw = _read(candidates_dir / f"{cid}.json")
         if raw is None or raw.get("candidate_id") != cid:
             skipped[cid] = "not_found"
+        elif cid in rejections:
+            skipped[cid] = "status_rejected"
         elif raw.get("status") not in advisor_prompt.ADVISABLE_STATUSES:
             skipped[cid] = f"status_{raw.get('status')}"
         elif cid in in_flight:
@@ -254,6 +266,7 @@ def start(vault: Any, candidate_ids: Any) -> Dict[str, Any]:
         "bdh_url": bdh_client._bdh_base_url(), "vault_root": str(vault_root), "candidates_dir": str(candidates_dir),
         "order": order, "total": len(order), "completed": 0,
         "items": {cid: {"state": "queued"} for cid in order}, "skipped": skipped,
+        "rejections": rejections,
     }
     _write(path, job)
     env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV")}
@@ -296,4 +309,5 @@ def config_summary(vault: Any) -> Dict[str, Any]:
     return {"vault": vault_id, "configured": True, "provider": config["provider"], "model": config["model"]}
 
 
-__all__ = ["start", "status", "active", "config_summary", "advisor_config", "resolve_runtime", "jobs_dir"]
+__all__ = ["start", "status", "active", "config_summary", "advisor_config", "resolve_runtime", "jobs_dir",
+           "rejection_ledger"]
