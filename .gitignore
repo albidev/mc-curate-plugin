@@ -7,3 +7,7 @@ __pycache__/
 
 # Local vault + advisor model routing (lives in ~/.hermes/vault-brain/); never commit a copy.
 curate-vaults.yaml
+
+# Local UI dependencies and throwaway browser transforms.
+node_modules
+browser-harness/.vite/

@@ -28,6 +28,7 @@ export interface PlanRow {
   advice_token: string;
   preselected: boolean;
   blocked?: string;
+  blocked_code?: string;
   merge?: { target_node_id: string; title: string; note_path: string; target_excerpt: string; claim: string; candidate_revision: string; target_revision: string };
 }
 
@@ -157,7 +158,7 @@ function Row({ row, checked, onToggle, item, onOpen, onUndo, undoing }: {
           {row.merge && <p className="mt-1 flex min-w-0 items-center gap-1 text-xs text-sky-200/90"><GitMerge size={12} className="shrink-0" /><span className="truncate">{row.merge.title || row.merge.note_path}</span></p>}
           <p className={`mt-1.5 text-[13px] leading-5 text-text-muted ${open ? '' : 'line-clamp-2'}`}>{row.reason || t('accept.noReason')}</p>
         </button>
-        {row.blocked && <p className="mt-2 flex items-start gap-1.5 text-xs leading-5 text-amber-200/90"><AlertTriangle size={13} className="mt-0.5 shrink-0" />{row.blocked}</p>}
+        {row.blocked && <p className="mt-2 flex items-start gap-1.5 text-xs leading-5 text-amber-200/90"><AlertTriangle size={13} className="mt-0.5 shrink-0" />{row.blocked_code === 'reconciliation_required' ? t('accept.reconciliationRequired') : row.blocked}</p>}
         {item?.error && <p className={`mt-2 text-xs leading-5 ${item.state === 'stale' ? 'text-amber-200/90' : 'text-rose-200/90'}`}>{item.error}</p>}
         {open && <div className="mt-3 space-y-2">
           {row.merge ? <>

@@ -31,6 +31,8 @@ def run():
             if path.endswith('/candidates/vaults'):
                 data = {'vaults': [{'id': 'core', 'label': 'Core', 'writable': True, 'candidate_enabled': True,
                                     'candidate_count': 1, 'pending_count': 1, 'reviewed_count': 0}], 'default_vault': 'core'}
+            elif path.endswith('/curate/advise/active'): data = {'jobs': [], 'advisor': {'configured': True,'model':'fixture-model','provider':'fixture-provider'}}
+            elif path.endswith('/curate/accept/active'): data = {'jobs': []}
             elif path.endswith('/candidates/clustered'): data = {'clusters': []}
             elif path.endswith('/candidates'): data = {'candidates': [CANDIDATE], 'vault': 'core'}
             elif path.endswith('/merge-targets'):
