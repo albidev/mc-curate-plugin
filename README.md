@@ -297,6 +297,65 @@ The UI intentionally distinguishes two layers:
 
 If a candidate contains metadata only, the UI says so instead of presenting raw YAML as a fake description. The source-note sections then show the actual evidence used to produce the candidate.
 
+### AI advisor (approve / merge / reject opinions)
+
+You can ask an LLM for an opinion on one candidate (brain icon on a card, or **Ask AI** in the
+detail dialog) or on every visible pending session-synthesis candidate (**Ask AI (N)** in the header).
+Badges update live as each opinion lands. The advisor only gives an opinion: it never approves,
+merges, or rejects a candidate, and it never changes its status.
+
+| Route | Purpose |
+|---|---|
+| `POST /api/local/curate/advise` `{vault, candidate_ids}` | Starts a job and returns the job id. Candidates that are already reviewed, missing, or in progress are listed under `skipped`. |
+| `GET /api/local/curate/advise/status?job=` | Live job state. The UI polls it every second while a job is active. |
+| `GET /api/local/curate/advise/active?vault=` | Jobs still running plus the configured model, so a page reload picks up running jobs. |
+
+How it works:
+
+- The telemetry process cannot import the Hermes model client. Each job therefore runs
+  `advisor_worker.py` as a detached process inside the Hermes runtime, found with
+  `hermes --print-runtime-command`. Credentials come from Hermes.
+- For each candidate, the worker:
+  1. asks BDH `/api/query` with `learn: false` for the 6 closest notes in the same vault. This
+     is read-only: no Hebbian update and no neurogenesis. If BDH is down, it falls back to
+     `merge-targets` title matches.
+  2. sends the model the candidate, those notes, similar pending candidates, the vault's
+     **signal / noise profile**, and up to 6 **past decisions by Albi** from the same vault.
+     The past decisions are approvals that overruled a curator reject, rejections that overruled a
+     curator approve, and rejections with a content reason. Plain agreements are skipped because
+     they say nothing about the bar. Rejections justified by provenance (probe artifacts) are skipped
+     because the model cannot see provenance. The prompt ranks the past decisions above the
+     profile, and the profile above the model's own taste (`advisor_prompt.SYSTEM_PROMPT`).
+  3. validates the answer. A merge target has to be one of the notes it was shown, and BDH has
+     to accept it as a merge target. If not, the model gets one corrective retry.
+  4. writes the opinion into the candidate's `extra.curator_*` fields. These are the same fields
+     the scheduled `curate-curator-review` cron writes, with `curator_source: on_demand`,
+     `curator_model`, `curator_confidence`, and `curator_reviewed_at` added.
+- Job files and logs are kept for 7 days under `$HERMES_HOME/vault-brain/curate-advice/jobs/`.
+  The worker is the only process that writes the job file. If the worker dies, the job is shown
+  as failed instead of staying stuck on "running".
+
+A `merge` opinion sets `curator_merge_target`. Approve then opens the directed merge dialog,
+the same thing that happens after a curator-review merge verdict. A later `approve` or `reject`
+opinion removes that target.
+
+The model is chosen per vault in the local `curate-vaults.yaml`. That file is gitignored and
+never committed:
+
+```yaml
+advisor:
+  default: {provider: anthropic, model: claude-sonnet-5}   # every vault without an override
+  concurrency: 4
+vaults:
+  core:
+    advisor:
+      provider: ollama-cloud
+      model: deepseek-v4.1-flash
+      description: Core — Hermes Agent, Mission Control, BDH memory system, ...
+      signal: [Diagnoses from real incidents on our stack, ...]   # what is signal for us
+      noise: [Textbook definitions with nothing specific to us, ...]
+```
+
 ## Overview Attention surface
 
 Curate contributes an optional generic `attention` surface to Mission Control:

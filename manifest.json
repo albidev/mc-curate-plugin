@@ -2,7 +2,7 @@
   "id": "curate",
   "name": "Curate",
   "description": "Review BDH session-synthesis and legacy candidate proposals",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "enabled": true,
   "routePath": "/curate",
   "navItem": {
@@ -111,6 +111,24 @@
       "method": "POST",
       "path": "/candidates/classify",
       "handler": "classifyPendingCandidates",
+      "authRequired": true
+    },
+    {
+      "method": "POST",
+      "path": "/curate/advise",
+      "handler": "startAdvice",
+      "authRequired": true
+    },
+    {
+      "method": "GET",
+      "path": "/curate/advise/status",
+      "handler": "adviceStatus",
+      "authRequired": true
+    },
+    {
+      "method": "GET",
+      "path": "/curate/advise/active",
+      "handler": "activeAdvice",
       "authRequired": true
     }
   ]

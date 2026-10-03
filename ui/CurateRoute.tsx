@@ -28,6 +28,7 @@ import remarkGfm from 'remark-gfm';
 import { approvalNotice } from './approval-notice';
 import { paginateItems } from './pagination';
 import { MergeDialog, type MergeResult } from './merge-dialog';
+import { CuratorAdvicePanel, CuratorBadge, adviceToFields, useCuratorAdvisor, type AdviceItem } from './advisor';
 
 function InlineActionButton({
   variant,
@@ -69,6 +70,10 @@ interface Candidate {
   curator_merge_target?: string;
   curator_verdict?: string;
   curator_note?: string;
+  curator_confidence?: string;
+  curator_model?: string;
+  curator_source?: string;
+  curator_reviewed_at?: string;
   type?: string;
   title?: string;
   status: string;
@@ -329,6 +334,8 @@ function ClusterCard({
   onMerge,
   onSelectMember,
   actionId,
+  live,
+  onAsk,
 }: {
   cluster: ClusterInfo;
   candidates: Candidate[];
@@ -339,6 +346,8 @@ function ClusterCard({
   onSelectMember: (candidate: Candidate) => void;
   onMerge: (candidate: Candidate) => void;
   actionId: string | null;
+  live?: AdviceItem;
+  onAsk?: (candidate: Candidate) => void;
 }) {
   const rep = candidates.find((c) => c.id === cluster.representative);
   const members = cluster.member_ids
@@ -368,6 +377,7 @@ function ClusterCard({
                 jev: {rep.jev_choice}{rep.jev_confidence ? ` ${Math.round(Number(rep.jev_confidence) * 100)}%` : ''}
               </span>
             )}
+            {rep && <CuratorBadge fields={rep} live={live} />}
           </div>
           <h3 className="truncate text-[15px] font-semibold text-text">{cluster.representative_title || cluster.representative}</h3>
           <p className="mt-1 line-clamp-2 text-sm leading-5 text-text-muted">{rep?.body || 'No candidate summary available.'}</p>
@@ -405,6 +415,7 @@ function ClusterCard({
           )}
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          {rep && onAsk && <InlineActionButton variant="ghost" title="Ask AI: approve, merge or reject the representative" disabled={live?.state === 'queued' || live?.state === 'running'} onClick={() => onAsk(rep)}><Brain size={14}/></InlineActionButton>}
           {rep?.source === 'session_synthesis' && ['pending_review', 'pre_approved'].includes(rep.status) && <InlineActionButton variant="ghost" title="Merge representative into existing note (only this candidate)" disabled={!!actionId} onClick={() => onMerge(rep)}><GitMerge size={14}/></InlineActionButton>}
           <InlineActionButton
             variant="primary"
@@ -489,6 +500,8 @@ function CandidateCard({
   onReject,
   onMerge,
   actionId,
+  live,
+  onAsk,
 }: {
   candidate: Candidate;
   selected: boolean;
@@ -497,6 +510,8 @@ function CandidateCard({
   onReject: (candidate: Candidate) => void;
   onMerge: (candidate: Candidate) => void;
   actionId: string | null;
+  live?: AdviceItem;
+  onAsk?: (candidate: Candidate) => void;
 }) {
   const confidence = confidenceValue(candidate);
   const tags = parseList(candidate.tags);
@@ -543,11 +558,13 @@ function CandidateCard({
                 jev: {candidate.jev_choice}{candidate.jev_confidence ? ` ${Math.round(Number(candidate.jev_confidence) * 100)}%` : ''}
               </span>
             )}
+            <CuratorBadge fields={candidate} live={live} />
             {tags.slice(0, 2).map((tag) => <span key={tag} className="text-sky-300/70">#{tag}</span>)}
           </div>
         </div>
         {isPending && (
           <div className="flex items-center gap-1.5 ml-auto shrink-0">
+            {onAsk && <InlineActionButton variant="ghost" title="Ask AI: approve, merge or reject" disabled={live?.state === 'queued' || live?.state === 'running'} onClick={e => { e.stopPropagation(); onAsk(candidate); }}><Brain size={14}/></InlineActionButton>}
             {candidate.source === 'session_synthesis' && <InlineActionButton variant="ghost" title="Merge into existing note" disabled={!!actionId} onClick={e => { e.stopPropagation(); onMerge(candidate); }}><GitMerge size={14}/></InlineActionButton>}
             <InlineActionButton
               variant="primary"
@@ -599,7 +616,29 @@ export function CurateRoute() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [classifying, setClassifying] = useState(false);
-  const [curatorRunning, setCuratorRunning] = useState(false);
+  const advisorEnabled = !!token && !!selectedVault && !!vaults.find((vault) => vault.id === selectedVault)?.writable;
+  const applyAdvice = useCallback((candidateId: string, item: AdviceItem) => {
+    // Same fields the worker persisted in extra.curator_*: the card flips now, a reload shows the same.
+    setCandidates((current) => current.map((candidate) => candidate.id === candidateId
+      ? { ...candidate, ...adviceToFields(item) }
+      : candidate));
+  }, []);
+  const advisor = useCuratorAdvisor({ vault: selectedVault, request: mergeRequest, enabled: advisorEnabled, onAdvice: applyAdvice });
+  const askAdvice = useCallback(async (targets: Candidate[]) => {
+    const ids = targets.map((candidate) => candidate.id).filter(Boolean);
+    if (!ids.length) return;
+    setError(null);
+    try {
+      const job = await advisor.ask(ids);
+      const skipped = Object.keys(job.skipped || {}).length;
+      setNotice(`Parere AI in corso su ${job.total} candidate (${job.provider}/${job.model})${skipped ? `, ${skipped} saltate` : ''}: i badge si aggiornano appena arriva ogni verdetto.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Impossibile avviare il parere AI.');
+    }
+  }, [advisor]);
+  const canAskAdvice = useCallback((candidate: Candidate) => advisorEnabled
+    && candidate.source === 'session_synthesis'
+    && (candidate.status === 'pending_review' || candidate.status === 'pre_approved'), [advisorEnabled]);
 
   useEffect(() => {
     setToken(localStorage.getItem('mission-control-token') || '');
@@ -650,19 +689,6 @@ export function CurateRoute() {
       setRefreshing(false);
     }
   }, [selectedVault, token]);
-
-  const runCuratorReview = useCallback(async () => {
-    setCuratorRunning(true);
-    setError(null);
-    try {
-      await requestJSON('/cron/jobs/0192c100bbb4/run', token, { method: 'POST' });
-      setNotice('Curator review avviata: il verdetto arriva su Discord (job curate-curator-review).');
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Impossibile avviare la curator review.');
-    } finally {
-      setCuratorRunning(false);
-    }
-  }, [token]);
 
   const runClassify = useCallback(async () => {
     setClassifying(true);
@@ -883,9 +909,13 @@ export function CurateRoute() {
             <p className="mt-1 max-w-2xl text-sm leading-6 text-text-muted">Review generated concepts before they become durable knowledge. Session-synthesis approvals apply directly to the selected vault; legacy file candidates are quarantined, not yet in the vault.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="secondary" onClick={() => void runCuratorReview()} disabled={curatorRunning} title="Lancia la curator review di Hermes sulle candidate pending (report su Discord)" className="px-3 text-sm">
-              <Brain size={15} className={curatorRunning ? 'animate-pulse' : ''} /> <span className="hidden sm:inline">{curatorRunning ? 'Review in corso…' : 'Curator review'}</span><span className="sm:hidden">Review</span>
-            </Button>
+            {advisor.advisor?.configured && <Button variant="secondary" onClick={() => void askAdvice(visibleCandidates.filter(canAskAdvice))}
+              disabled={!!advisor.progress || !visibleCandidates.some(canAskAdvice)}
+              title={`Chiede approve / merge / reject per ogni candidata pending visibile (${advisor.advisor.provider}/${advisor.advisor.model})`} className="px-3 text-sm">
+              {advisor.progress ? <Loader2 size={15} className="animate-spin" /> : <Brain size={15} />}
+              <span className="hidden sm:inline">{advisor.progress ? `AI ${advisor.progress.completed}/${advisor.progress.total}` : `Ask AI (${visibleCandidates.filter(canAskAdvice).length})`}</span>
+              <span className="sm:hidden">AI</span>
+            </Button>}
             <Button variant="secondary" onClick={() => void runClassify()} disabled={classifying || refreshing} title="Esegue il Jev gate sulle candidate pending (idempotente, verdict-only)" className="px-3 text-sm">
               <Sparkles size={15} className={classifying ? 'animate-spin' : ''} /> <span className="hidden sm:inline">{classifying ? 'Classifying…' : 'Run Jev gate'}</span><span className="sm:hidden">Gate</span>
             </Button>
@@ -895,6 +925,7 @@ export function CurateRoute() {
           </div>
         </header>
 
+        {advisor.failures.length > 0 && <div className="flex items-start gap-3 rounded-2xl border border-rose-400/25 bg-rose-400/10 p-3 text-sm text-rose-200"><XCircle size={17} className="mt-0.5 shrink-0" /><span>Parere AI fallito: {advisor.failures[advisor.failures.length - 1]}</span></div>}
         {error && <div className="flex items-start gap-3 rounded-2xl border border-rose-400/25 bg-rose-400/10 p-3 text-sm text-rose-200"><XCircle size={17} className="mt-0.5 shrink-0" /><span>{error}</span></div>}
         {notice && <div className="flex items-center gap-3 rounded-2xl border border-emerald-400/25 bg-emerald-400/10 p-3 text-sm text-emerald-200"><CheckCircle2 size={17} className="shrink-0" /><span>{notice}</span></div>}
 
@@ -1032,6 +1063,8 @@ export function CurateRoute() {
                 onReject={(candidate) => { setRejecting(candidate); setRejectReason(''); }}
                 onSelectMember={(member) => setSelectedId(member.id)}
                 actionId={actionId}
+                live={advisor.liveById.get(item.cluster.representative)}
+                onAsk={candidates.some((c) => c.id === item.cluster.representative && canAskAdvice(c)) ? (candidate) => void askAdvice([candidate]) : undefined}
               />
             ) : (
               <CandidateCard
@@ -1043,6 +1076,8 @@ export function CurateRoute() {
                 onMerge={openMerge}
                 onReject={(candidate) => { setRejecting(candidate); setRejectReason(''); }}
                 actionId={actionId}
+                live={advisor.liveById.get(item.candidate.id)}
+                onAsk={canAskAdvice(item.candidate) ? (candidate) => void askAdvice([candidate]) : undefined}
               />
             ))}
             {!queueItems.length && <div className="rounded-2xl border border-dashed border-white/10 px-5 py-12 text-center"><ClipboardCheck size={28} className="mx-auto text-text-subtle" /><p className="mt-3 text-sm font-medium text-text">No candidates match</p><p className="mt-1 text-xs text-text-muted">Try another status, vault, or search term.</p></div>}
@@ -1063,7 +1098,9 @@ export function CurateRoute() {
 
       {selectedCandidate && <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/65 p-0 sm:items-center sm:p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedId(null); }}>
         <div role="dialog" aria-modal="true" aria-labelledby="curate-candidate-title" className="max-h-[92vh] w-full overflow-hidden rounded-t-3xl border border-white/10 bg-surface shadow-2xl sm:max-w-3xl sm:rounded-3xl">
-          <CandidateDetail candidate={selectedCandidate} actionId={actionId} onMerge={openMerge} onClose={() => setSelectedId(null)} onApprove={(candidate) => void performAction(candidate, 'approve')} onReject={(candidate) => { setRejecting(candidate); setRejectReason(''); }} />
+          <CandidateDetail candidate={selectedCandidate} actionId={actionId} onMerge={openMerge}
+            live={advisor.liveById.get(selectedCandidate.id)}
+            canAsk={canAskAdvice(selectedCandidate)} onAsk={(candidate) => void askAdvice([candidate])} onClose={() => setSelectedId(null)} onApprove={(candidate) => void performAction(candidate, 'approve')} onReject={(candidate) => { setRejecting(candidate); setRejectReason(''); }} />
         </div>
       </div>}
 
@@ -1081,6 +1118,9 @@ function CandidateDetail({
   onApprove,
   onReject,
   onMerge,
+  live,
+  canAsk = false,
+  onAsk,
 }: {
   candidate: Candidate;
   actionId: string | null;
@@ -1088,6 +1128,9 @@ function CandidateDetail({
   onApprove: (candidate: Candidate) => void;
   onReject: (candidate: Candidate) => void;
   onMerge?: (candidate: Candidate) => void;
+  live?: AdviceItem;
+  canAsk?: boolean;
+  onAsk?: (candidate: Candidate) => void;
 }) {
   const confidence = confidenceValue(candidate);
   const tags = parseList(candidate.tags);
@@ -1117,7 +1160,7 @@ function CandidateDetail({
 {candidate.approved_at && <Meta label="Approved" value={formatDate(candidate.approved_at)} />}
 {candidate.quarantine_until && <Meta label="Quarantine until" value={formatDate(candidate.quarantine_until)} />}
 </>)}
-</div><div className="mt-5"><p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-subtle">Candidate body</p>{fullBody ? <article className="max-h-[32vh] overflow-y-auto rounded-xl border border-white/[0.08] bg-black/10 p-3"><CandidateMarkdown content={fullBody} /></article> : <div className="rounded-xl border border-dashed border-amber-400/25 bg-amber-400/[0.06] p-3 text-sm leading-6 text-amber-100/80">This candidate contains metadata only. The semantic description is available in the source notes below.</div>}</div>{candidate.sourceNotes?.length ? <div className="mt-5"><p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-subtle">Evidence from source notes</p><div className="space-y-3">{candidate.sourceNotes.map((note) => <section key={note.source} className="rounded-xl border border-white/[0.08] bg-black/10 p-3"><div className="flex items-center justify-between gap-3"><p className="text-sm font-medium text-text">{note.title}</p><span className={`text-[10px] uppercase tracking-[0.12em] ${note.match_type === 'related' ? 'text-amber-300' : note.found ? 'text-emerald-300' : 'text-text-subtle'}`}>{note.match_type === 'related' ? 'related' : note.found ? 'found' : 'missing'}</span></div>{note.found && <p className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap text-xs leading-5 text-text-muted">{note.body}</p>}</section>)}</div></div> : null}{sourceNodeIds.length > 0 && <div className="mt-5"><div className="mb-2"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-subtle">Source nodes ({sourceNodeIds.length})</p><p className="mt-1 text-xs leading-5 text-text-muted">BDH graph nodes activated as evidence/context for this synthesis. They are not notes created by the candidate; older nodes are expected.</p></div><div className="space-y-1.5">{sourceNodeIds.map((nodeId) => <code key={nodeId} title={nodeId} className="block break-all rounded-lg border border-sky-400/15 bg-sky-400/[0.06] px-2.5 py-2 text-[11px] leading-5 text-sky-200">{nodeId}</code>)}</div></div>}{tags.length > 0 && <DetailList label="Tags" items={tags} tone="sky" />}{sources.length > 0 && <DetailList label="Source notes (summary)" items={sources} tone="neutral" />}{candidate.rejection_reason && <div className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 p-3"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-rose-300">Rejection feedback</p><p className="mt-2 text-sm leading-5 text-rose-100/80">{candidate.rejection_reason}</p></div>}</div>
+</div>{(candidate.curator_verdict || canAsk) && <CuratorAdvicePanel fields={candidate} live={live} canAsk={canAsk && !!onAsk} onAsk={() => onAsk?.(candidate)} />}<div className="mt-5"><p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-subtle">Candidate body</p>{fullBody ? <article className="max-h-[32vh] overflow-y-auto rounded-xl border border-white/[0.08] bg-black/10 p-3"><CandidateMarkdown content={fullBody} /></article> : <div className="rounded-xl border border-dashed border-amber-400/25 bg-amber-400/[0.06] p-3 text-sm leading-6 text-amber-100/80">This candidate contains metadata only. The semantic description is available in the source notes below.</div>}</div>{candidate.sourceNotes?.length ? <div className="mt-5"><p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-subtle">Evidence from source notes</p><div className="space-y-3">{candidate.sourceNotes.map((note) => <section key={note.source} className="rounded-xl border border-white/[0.08] bg-black/10 p-3"><div className="flex items-center justify-between gap-3"><p className="text-sm font-medium text-text">{note.title}</p><span className={`text-[10px] uppercase tracking-[0.12em] ${note.match_type === 'related' ? 'text-amber-300' : note.found ? 'text-emerald-300' : 'text-text-subtle'}`}>{note.match_type === 'related' ? 'related' : note.found ? 'found' : 'missing'}</span></div>{note.found && <p className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap text-xs leading-5 text-text-muted">{note.body}</p>}</section>)}</div></div> : null}{sourceNodeIds.length > 0 && <div className="mt-5"><div className="mb-2"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-subtle">Source nodes ({sourceNodeIds.length})</p><p className="mt-1 text-xs leading-5 text-text-muted">BDH graph nodes activated as evidence/context for this synthesis. They are not notes created by the candidate; older nodes are expected.</p></div><div className="space-y-1.5">{sourceNodeIds.map((nodeId) => <code key={nodeId} title={nodeId} className="block break-all rounded-lg border border-sky-400/15 bg-sky-400/[0.06] px-2.5 py-2 text-[11px] leading-5 text-sky-200">{nodeId}</code>)}</div></div>}{tags.length > 0 && <DetailList label="Tags" items={tags} tone="sky" />}{sources.length > 0 && <DetailList label="Source notes (summary)" items={sources} tone="neutral" />}{candidate.rejection_reason && <div className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 p-3"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-rose-300">Rejection feedback</p><p className="mt-2 text-sm leading-5 text-rose-100/80">{candidate.rejection_reason}</p></div>}</div>
     <div className="flex justify-end gap-2 border-t border-white/[0.08] p-4"><Button variant="ghost" onClick={onClose}>Close</Button>{onMerge && isPending && candidate.source === 'session_synthesis' && <Button variant="secondary" disabled={!!actionId} onClick={() => onMerge(candidate)} title="Merge candidate into existing vault note"><GitMerge size={15}/> Merge into…</Button>}{isPending && <><Button variant="danger" onClick={() => onReject(candidate)} disabled={actionId === candidate.id}><XCircle size={15} /> Reject</Button><Button variant="primary" onClick={() => onApprove(candidate)} disabled={actionId === candidate.id}>{actionId === candidate.id ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} Approve candidate</Button></>}</div>
   </div>;
 }

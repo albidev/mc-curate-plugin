@@ -4,3 +4,6 @@ __pycache__/
 .env
 .env.*
 !.env.example
+
+# Local vault + advisor model routing (lives in ~/.hermes/vault-brain/); never commit a copy.
+curate-vaults.yaml

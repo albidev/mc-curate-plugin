@@ -136,6 +136,8 @@ def _safe_candidate(raw: dict[str, Any]) -> dict[str, Any]:
         "provenance": provenance_detail,
         "extra": _safe_detail_map(raw.get("extra"), allowed={
             "activated_from", "slug", "curator_merge_target", "curator_verdict", "curator_note",
+            # Curator opinion metadata (scheduled review or on-demand advisor):
+            "curator_confidence", "curator_model", "curator_source", "curator_reviewed_at",
             # Jev gate fields (schema-safe, in extra since commit 535c185):
             "jev_choice", "jev_confidence", "jev_criteria_version",
             "cluster_id", "cluster_members", "auto_rejected_at",

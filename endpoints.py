@@ -294,3 +294,26 @@ def classifyPendingCandidates(body: Dict[str, Any], params: Dict[str, List[str]]
         raise PluginError(503, "pipeline_unavailable",
                           "Curate pipeline sidecar is unavailable.")
     return result
+
+
+# ---------------------------------------------------------------------------
+# AI advisor: approve / merge / reject opinions, per card or bulk (live jobs)
+# ---------------------------------------------------------------------------
+
+def startAdvice(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any = None) -> Dict[str, Any]:
+    """POST /api/local/curate/advise {vault, candidate_ids} — start an advisor job."""
+    import advisor_jobs
+    return advisor_jobs.start(body.get("vault"), body.get("candidate_ids"))
+
+
+def adviceStatus(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any = None) -> Dict[str, Any]:
+    """GET /api/local/curate/advise/status?job= — live job state."""
+    import advisor_jobs
+    return advisor_jobs.status((params.get("job") or [""])[0])
+
+
+def activeAdvice(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any = None) -> Dict[str, Any]:
+    """GET /api/local/curate/advise/active?vault= — running jobs, so a reload resumes them."""
+    import advisor_jobs
+    vault = (params.get("vault") or [""])[0]
+    return {**advisor_jobs.active(vault), "advisor": advisor_jobs.config_summary(vault)}

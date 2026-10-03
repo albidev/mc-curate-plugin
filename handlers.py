@@ -149,6 +149,10 @@ def _normalize_session_synthesis_candidate(raw: Dict[str, Any]) -> Dict[str, Any
         "curator_merge_target": extra.get("curator_merge_target"),
         "curator_verdict": extra.get("curator_verdict"),
         "curator_note": extra.get("curator_note"),
+        "curator_confidence": extra.get("curator_confidence"),
+        "curator_model": extra.get("curator_model"),
+        "curator_source": extra.get("curator_source"),
+        "curator_reviewed_at": extra.get("curator_reviewed_at"),
         # Jev gate fields live in extra (schema-safe); surface them for the UI
         "jev_choice": extra.get("jev_choice"),
         "jev_confidence": extra.get("jev_confidence"),
