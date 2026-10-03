@@ -23,7 +23,7 @@ import textwrap
 import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 # When loaded as an external plugin, hermes_paths may not be on sys.path.
@@ -220,17 +220,36 @@ DEFAULT_CANDIDATES_DIR = _default_candidates_dir()
 DEFAULT_QUARANTINE_DAYS = float(os.environ.get("VB_QUARANTINE_DAYS", "1"))
 
 
-def _load_vaults() -> Dict[str, Dict[str, Any]]:
-    """Load the local candidate map used by Curate."""
+def read_vaults_config() -> Tuple[Dict[str, Any], Optional[str]]:
+    """Parse curate-vaults.yaml: (settings, error). A missing file is not an error.
+
+    The error is surfaced in the vault list and in the advisor status, so a file that
+    exists but cannot be read (PyYAML missing, bad YAML) never degrades silently into
+    "no extra vaults, no advisor".
+    """
     path = _vaults_file()
     if not path.exists():
-        return {}
+        return {}, None
     try:
         import yaml
+    except ImportError:
+        return {}, f"{path.name} found but PyYAML is not installed in the Mission Control telemetry Python."
+    try:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        return {str(k): dict(v) for k, v in (data.get("vaults") or {}).items()}
-    except Exception:
+    except (OSError, yaml.YAMLError) as exc:
+        return {}, f"{path.name} could not be read: {str(exc).splitlines()[0][:200]}"
+    if not isinstance(data, dict):
+        return {}, f"{path.name} must be a mapping with `advisor:` and `vaults:` keys."
+    return data, None
+
+
+def _load_vaults() -> Dict[str, Dict[str, Any]]:
+    """Load the local candidate map used by Curate."""
+    data, _ = read_vaults_config()
+    vaults = data.get("vaults")
+    if not isinstance(vaults, dict):
         return {}
+    return {str(k): dict(v) for k, v in vaults.items() if isinstance(v, dict)}
 
 
 def _load_routing_vaults() -> Dict[str, Dict[str, Any]]:

@@ -1,5 +1,6 @@
 # Runtime + test dependencies for the Curate plugin CI.
 # The plugin is a Python HTTP surface loaded by the Mission Control plugin
-# loader; it has no third-party runtime dependency by design (stdlib only).
+# loader. Runtime needs the standard library plus PyYAML (curate-vaults.yaml and
+# legacy candidate frontmatter); it must be importable by the telemetry Python.
 pytest>=9.1.1
 PyYAML>=6.0.3

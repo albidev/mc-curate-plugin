@@ -7,7 +7,7 @@ export const curateManifest: MCPluginManifest = {
   enabled: true,
   navItem: {
     to: '/curate',
-    label: 'nav.curate',
+    label: 'Curate',
     icon: 'Brain',
     order: 60,
     indicator: {

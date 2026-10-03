@@ -59,13 +59,10 @@ def jobs_dir() -> Path:
 
 
 def _settings() -> Dict[str, Any]:
-    path = handlers._vaults_file()
-    if not path.exists():
-        return {}
-    import yaml
-
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    return data if isinstance(data, dict) else {}
+    data, error = handlers.read_vaults_config()
+    if error:
+        raise CurateIntegrationError(503, "config_unreadable", error)
+    return data
 
 
 def _dict(value: Any) -> Dict[str, Any]:

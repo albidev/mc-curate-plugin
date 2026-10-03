@@ -21,6 +21,33 @@ def _write_settings(text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def test_unreadable_config_is_reported_not_silently_dropped(monkeypatch):
+    import builtins
+    import endpoints
+
+    _write_settings("advisor:\n  default: {provider: p, model: m}\nvaults: [unclosed\n")
+    monkeypatch.setattr(handlers, "list_vaults", lambda: [])  # BDH is not part of this contract
+    payload = endpoints.listVaults({}, {})
+    assert payload["config_error"] and "curate-vaults.yaml" in payload["config_error"]
+    assert advisor_jobs.config_summary("core")["configured"] is False
+    assert advisor_jobs.config_summary("core")["detail"] == payload["config_error"]
+
+    _write_settings("advisor:\n  default: {provider: p, model: m}\n")
+    real_import = builtins.__import__
+
+    def no_yaml(name, *args, **kwargs):
+        if name == "yaml":
+            raise ImportError("No module named 'yaml'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_yaml)
+    assert "PyYAML" in (handlers.read_vaults_config()[1] or "")
+    monkeypatch.undo()
+
+    handlers._vaults_file().unlink()
+    assert handlers.read_vaults_config() == ({}, None)  # no file: plain defaults, no warning
+
+
 def test_vault_override_wins_and_other_vaults_inherit_default():
     _write_settings(
         "advisor:\n  default: {provider: anthropic, model: claude-sonnet-5}\n"

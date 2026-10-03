@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
+  AlertTriangle,
   Archive,
   Bot,
   Brain,
@@ -603,6 +604,8 @@ export function CurateRoute() {
   const [clusters, setClusters] = useState<ClusterInfo[]>([]);
   // The Jev gate lives in the optional Curate sidecar; its clustered endpoint reports when it is down.
   const [pipelineAvailable, setPipelineAvailable] = useState(false);
+  // curate-vaults.yaml exists but could not be read: extra vaults and the advisor are off.
+  const [configError, setConfigError] = useState<string | null>(null);
   const [expandedClusters, setExpandedClusters] = useState<Set<string>>(new Set());
   const [restoringId, setRestoringId] = useState<string | null>(null);
   const [selectedVault, setSelectedVault] = useState(searchParams.get('vault') || '');
@@ -679,11 +682,12 @@ export function CurateRoute() {
         : '/candidates';
       const [candidateResult, vaultResult, clusterResult] = await Promise.allSettled([
         requestJSON<{ candidates: Candidate[]; vault?: string | null }>(candidatePath, token),
-        requestJSON<{ vaults: VaultInfo[]; default_vault?: string | null }>('/candidates/vaults', token),
+        requestJSON<{ vaults: VaultInfo[]; default_vault?: string | null; config_error?: string | null }>('/candidates/vaults', token),
         requestJSON<{ clusters: ClusterInfo[]; sidecar?: string }>(selectedVault ? `/candidates/clustered?vault=${encodeURIComponent(selectedVault)}` : '/candidates/clustered', token),
       ]);
       if (vaultResult.status === 'rejected') throw vaultResult.reason;
       const vaultPayload = vaultResult.value;
+      setConfigError(vaultPayload.config_error || null);
       setVaults(vaultPayload.vaults || []);
       if (clusterResult.status === 'fulfilled') {
         setClusters(clusterResult.value.clusters || []);
@@ -972,6 +976,7 @@ export function CurateRoute() {
         </div>}
         {advisor.failures.length > 0 && <div className="flex items-start gap-3 rounded-2xl border border-rose-400/25 bg-rose-400/10 p-3 text-sm text-rose-200"><XCircle size={17} className="mt-0.5 shrink-0" /><span>{t('advice.failed', { error: advisor.failures[advisor.failures.length - 1] })}</span></div>}
         {error && <div className="flex items-start gap-3 rounded-2xl border border-rose-400/25 bg-rose-400/10 p-3 text-sm text-rose-200"><XCircle size={17} className="mt-0.5 shrink-0" /><span>{error}</span></div>}
+        {configError && <div className="flex items-start gap-3 rounded-2xl border border-amber-400/25 bg-amber-400/10 p-3 text-sm text-amber-100"><AlertTriangle size={17} className="mt-0.5 shrink-0" /><span>{t('config.unreadable', { detail: configError })}</span></div>}
         {notice && <div className="flex items-center gap-3 rounded-2xl border border-emerald-400/25 bg-emerald-400/10 p-3 text-sm text-emerald-200"><CheckCircle2 size={17} className="shrink-0" /><span>{notice}</span></div>}
 
         <section className="grid grid-cols-2 gap-3 xl:grid-cols-4">

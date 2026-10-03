@@ -7,7 +7,7 @@
   "routePath": "/curate",
   "navItem": {
     "to": "/curate",
-    "label": "nav.curate",
+    "label": "Curate",
     "icon": "Brain",
     "order": 60,
     "indicator": {

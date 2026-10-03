@@ -46,7 +46,8 @@ def listVaults(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any = N
     """GET /api/local/candidates/vaults"""
     vaults = handlers.list_vaults()
     default_vault = next((vault["id"] for vault in vaults if vault.get("candidate_enabled")), None)
-    return {"vaults": vaults, "default_vault": default_vault}
+    _, config_error = handlers.read_vaults_config()
+    return {"vaults": vaults, "default_vault": default_vault, "config_error": config_error}
 
 
 def curateStatus(body: Dict[str, Any], params: Dict[str, List[str]], auth: Any = None) -> Dict[str, Any]:

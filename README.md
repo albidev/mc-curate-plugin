@@ -29,6 +29,7 @@ Curate is installed as an external plugin by cloning this repository into the He
 | [bdh-hermes-bridge](https://github.com/albidev/bdh-hermes-bridge) | producing candidates | Sends Hermes sessions to BDH as `session_synthesis`. Without it (or another producer) the queue stays empty. |
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | AI advisor only | The advisor calls the model through the Hermes runtime (`hermes` on `PATH`, or `advisor.hermes_bin`). Provider credentials stay in Hermes. |
 | Curate sidecar (`CURATE_SIDECAR_URL`, default `http://127.0.0.1:8775`) | clustering, Jev gate, auto-reject audit | Optional, and not published. The **Run Jev gate** button only appears when it is reachable. |
+| A legacy candidate producer | legacy file candidates only | Curate also reviews YAML-frontmatter `.md` files in a vault's `candidates_dir`. The author's producer (a nightly `vault-brain-v2.py` script) and the post-quarantine promoter are not published, so on another install this queue stays empty unless you write such files yourself. Session synthesis does not depend on it. |
 
 The plugin itself has no Python dependency beyond the standard library and PyYAML, and no
 credentials of its own.
@@ -57,12 +58,21 @@ cd /path/to/hermes-mission-control
 bash scripts/setup-plugins.sh
 ```
 
-Restart the Mission Control telemetry sidecar and Vite after installation or update:
+Restart the Mission Control telemetry sidecar (it loads the plugin backend) and Vite (it
+serves the plugin UI) after installation or update, with the service manager that runs them:
 
 ```bash
+# Linux, Mission Control's systemd --user units
+systemctl --user restart hermes-mission-control-telemetry hermes-mission-control
+
+# macOS, Mission Control's LaunchAgents
 launchctl kickstart -k gui/$(id -u)/ai.hermes.mission-control-telemetry
 launchctl kickstart -k gui/$(id -u)/ai.hermes.mission-control
 ```
+
+Running them by hand instead: restart `scripts/run-local-telemetry.sh` and the Vite dev server
+(`pnpm exec vite`) from the Mission Control checkout. Unit names and ports are in Mission
+Control's `systemd/` directory and README.
 
 The plugin is active when its directory contains a valid `manifest.json`.
 
@@ -567,7 +577,8 @@ Source-note indexing and caching should keep the response fast even when the vau
 ```bash
 cd /path/to/hermes-mission-control
 bash scripts/setup-plugins.sh
-launchctl kickstart -k gui/$(id -u)/ai.hermes.mission-control
+systemctl --user restart hermes-mission-control                # Linux
+launchctl kickstart -k gui/$(id -u)/ai.hermes.mission-control  # macOS
 ```
 
 Confirm the UI route is served:
@@ -591,8 +602,17 @@ If the response is 500, inspect the telemetry error log. Common causes include a
 Restart the sidecar:
 
 ```bash
-launchctl kickstart -k gui/$(id -u)/ai.hermes.mission-control-telemetry
+systemctl --user restart hermes-mission-control-telemetry                # Linux
+launchctl kickstart -k gui/$(id -u)/ai.hermes.mission-control-telemetry  # macOS
 ```
+
+### The AI advisor or extra vaults are missing
+
+If `curate-vaults.yaml` exists but cannot be read, Curate shows an amber banner with the cause
+and ignores the file: only BDH's default vault is listed and the advisor stays off. The usual
+causes are PyYAML missing from the Python that runs the telemetry sidecar
+(`<that python> -m pip install PyYAML`) and a YAML syntax error. The same message is in the
+`config_error` field of `GET /api/local/candidates/vaults`.
 
 ### Source notes are missing
 
