@@ -940,8 +940,7 @@ export function CurateRoute() {
       : [];
   });
   const reviewableIds = visibleCandidates.filter((candidate) => canAskAdvice(candidate) && !!candidate.curator_verdict).map((candidate) => candidate.id);
-  const pendingCandidates = candidates.filter((candidate) => ['pending', 'pending_review', 'pre_approved'].includes(candidate.status));
-  const pendingCount = buildQueueItems(pendingCandidates, multiClusters).length;
+  const pendingCount = candidates.filter((candidate) => ['pending', 'pending_review', 'pre_approved'].includes(candidate.status)).length;
   const approvedCount = candidates.filter((candidate: Candidate) => ['approved', 'promoted', 'applied', 'created', 'merged'].includes(candidate.status)).length;
   const averageConfidence = candidates.length
     ? candidates.reduce((sum, candidate) => sum + (confidenceValue(candidate) || 0), 0) / candidates.length
