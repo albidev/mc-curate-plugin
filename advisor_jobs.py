@@ -216,7 +216,7 @@ def _active_jobs(vault: str) -> List[Dict[str, Any]]:
     return sorted(out, key=lambda j: j.get("created_at") or "")
 
 
-def start(vault: Any, candidate_ids: Any, locale: Any = None) -> Dict[str, Any]:
+def start(vault: Any, candidate_ids: Any, locale: Any = None, source: Any = None) -> Dict[str, Any]:
     """Queue one advisor job. ``locale`` (the UI language) sets the language of the
     reasons unless ``advisor.language`` pins one in curate-vaults.yaml."""
     vault_id = handlers._validate_vault_id(vault)
@@ -229,6 +229,9 @@ def start(vault: Any, candidate_ids: Any, locale: Any = None) -> Dict[str, Any]:
         raise CurateIntegrationError(400, "bad_request", f"Up to {MAX_BATCH} valid candidate ids are allowed.")
     if not handlers.can_curate(vault_id):
         raise CurateIntegrationError(403, "vault_not_curable", "Candidate mutations are disabled for this vault.")
+    source = source or "on_demand"
+    if source not in {"on_demand", "scheduled"}:
+        raise CurateIntegrationError(400, "bad_request", "Invalid advisor source.")
     config = advisor_config(vault_id)
     vault_root = _bdh_vault_root(vault_id)
     candidates_dir = vault_root / ".bdh-candidates"
@@ -264,6 +267,7 @@ def start(vault: Any, candidate_ids: Any, locale: Any = None) -> Dict[str, Any]:
         "provider": config["provider"], "model": config["model"], "description": config["description"],
         "signal": config["signal"], "noise": config["noise"], "owner": config["owner"],
         "language": config["language"] or (locale if locale in advisor_prompt.LANGUAGES else "en"),
+        "source": str(source).strip() if source else "on_demand",
         "concurrency": config["concurrency"], "prompt_version": advisor_prompt.PROMPT_VERSION,
         "bdh_url": bdh_client._bdh_base_url(), "vault_root": str(vault_root), "candidates_dir": str(candidates_dir),
         "order": order, "total": len(order), "completed": 0,

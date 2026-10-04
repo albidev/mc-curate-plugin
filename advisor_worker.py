@@ -257,12 +257,14 @@ class Advisor:
         if raw.get("status") not in prompt.ADVISABLE_STATUSES:
             return False
         extra = raw.get("extra") if isinstance(raw.get("extra"), dict) else {}
+        if self.job.data.get("source") == "scheduled" and extra.get("curator_verdict"):
+            return False  # Preserve advice that arrived after the scheduled selection.
         extra.update({
             "curator_verdict": advice["verdict"],
             "curator_confidence": f"{advice['confidence']:.2f}",
             "curator_note": advice["reason"],
             "curator_model": f"{self.provider}/{self.model}",
-            "curator_source": "on_demand",
+            "curator_source": self.job.data.get("source", "on_demand"),
             "curator_reviewed_at": _now(),
             "curator_prompt_version": prompt.PROMPT_VERSION,
         })
