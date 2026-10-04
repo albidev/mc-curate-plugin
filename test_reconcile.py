@@ -230,3 +230,15 @@ def test_pid_reuse_cannot_strand_an_untracked_job(monkeypatch):
     path.with_suffix('.lock').write_bytes(b'\0')  # Released lease of the old worker, not this unrelated process.
     monkeypatch.delitem(advisor_jobs._PROCS, job['job_id'], raising=False)
     assert reconcile_jobs.status(job['job_id'])['status'] == 'failed'
+
+
+def test_job_validation_does_not_import_another_plugins_endpoint_module(monkeypatch):
+    import reconcile_jobs
+    import sys
+    from types import SimpleNamespace
+    def foreign(*args):
+        pytest.fail('Business logic must not import the generic endpoints module')
+    monkeypatch.setitem(sys.modules, 'endpoints', SimpleNamespace(_merge_identity=foreign, _merge_field=foreign))
+    with pytest.raises(handlers.CurateIntegrationError) as error:
+        reconcile_jobs.start({})
+    assert error.value.status_code == 400 and error.value.code == 'bad_request'
