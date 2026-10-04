@@ -363,10 +363,10 @@ If a candidate contains metadata only, the UI says so instead of presenting raw 
 ### AI advisor (approve / merge / reject opinions)
 
 You can ask an LLM for an opinion on one candidate (brain icon on a card, or **Ask AI** in the
-detail dialog) or in bulk (**Ask AI (N)** in the header). The bulk button counts only the visible
-pending session-synthesis candidates the advisor has not answered yet. A scheduled cron opinion
-still counts, because it comes from an older model. To ask again about a candidate that already
-has an opinion, use its detail dialog.
+detail dialog) or in bulk (**Ask AI (N)** in the header). The bulk button counts visible pending
+cards without an AI opinion, not raw candidates hidden inside a cluster. For a cluster card it asks
+about the representative shown on that card. To ask again about a candidate that already has an
+opinion, including one from the scheduled cron, use its detail dialog.
 Badges update live as each opinion lands. The advisor only gives an opinion: it never approves,
 merges, or rejects a candidate, and it never changes its status. Applying opinions is a separate,
 human step: see **Accepting AI suggestions in bulk** below.

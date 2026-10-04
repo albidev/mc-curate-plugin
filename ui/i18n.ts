@@ -66,3 +66,13 @@ export function formatDate(value: string | undefined, locale: Locale = currentLo
   if (Number.isNaN(date.getTime())) return value;
   return new Intl.DateTimeFormat(locale === 'it' ? 'it-IT' : 'en-US', { dateStyle: 'medium' }).format(date);
 }
+
+export function formatDateTime(value: string | undefined, locale: Locale = currentLocale()): string {
+  if (!value || value === 'null') return translate(locale, 'common.unknownDate');
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat(locale === 'it' ? 'it-IT' : 'en-US', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date);
+}

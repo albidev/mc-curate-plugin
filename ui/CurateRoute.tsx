@@ -31,7 +31,7 @@ import { paginateItems } from './pagination';
 import { MergeDialog, type MergeResult } from './merge-dialog';
 import { CuratorAdvicePanel, CuratorBadge, adviceToFields, useCuratorAdvisor, type AdviceItem } from './advisor';
 import { AcceptReview, useAcceptJob, type AcceptJob } from './accept-review';
-import { currentLocale, formatDate, tr, useT } from './i18n';
+import { currentLocale, formatDateTime, tr, useT } from './i18n';
 import { EN, type MessageKey } from './messages';
 
 function InlineActionButton({
@@ -450,6 +450,47 @@ function clusterToCandidate(cluster: ClusterInfo): Candidate {
   } as Candidate;
 }
 
+function buildQueueItems(candidates: Candidate[], clusters: ClusterInfo[]): CandidateQueueItem[] {
+  const visibleById = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+  const clusterByMember = new Map<string, ClusterInfo>();
+  for (const cluster of clusters) {
+    for (const memberId of cluster.member_ids) {
+      if (!clusterByMember.has(memberId)) clusterByMember.set(memberId, cluster);
+    }
+  }
+
+  const items: CandidateQueueItem[] = [];
+  const consumedIds = new Set<string>();
+  for (const candidate of candidates) {
+    if (consumedIds.has(candidate.id)) continue;
+    const cluster = clusterByMember.get(candidate.id);
+    if (cluster) {
+      const memberIds = [...new Set(cluster.member_ids.filter((id) => visibleById.has(id)))];
+      const members = memberIds
+        .map((id) => visibleById.get(id))
+        .filter((member): member is Candidate => Boolean(member));
+      if (members.length > 1) {
+        const representative = members.find((member) => member.id === cluster.representative) || members[0];
+        items.push({
+          kind: 'cluster',
+          cluster: {
+            ...cluster,
+            representative: representative.id,
+            representative_title: representative.title || representative.id,
+            member_ids: members.map((member) => member.id),
+            member_titles: members.map((member) => member.title || member.id),
+          },
+        });
+        for (const member of members) consumedIds.add(member.id);
+        continue;
+      }
+    }
+    items.push({ kind: 'candidate', candidate });
+    consumedIds.add(candidate.id);
+  }
+  return items;
+}
+
 function AutoRejectedCard({
   candidate,
   onRestore,
@@ -479,7 +520,7 @@ function AutoRejectedCard({
                 jev: {candidate.jev_choice}{conf !== null ? ` ${Math.round(conf * 100)}%` : ''}
               </span>
             )}
-            <span className="text-[11px] text-text-subtle">{formatDate(candidate.auto_rejected_at || candidate.created)}</span>
+            <span className="text-[11px] text-text-subtle">{formatDateTime(candidate.auto_rejected_at || candidate.created)}</span>
           </div>
           <button type="button" onClick={onSelect} className="w-full text-left">
             <h3 className="truncate text-[15px] font-semibold text-text">{candidate.title || candidate.id}</h3>
@@ -544,7 +585,7 @@ function CandidateCard({
           <h3 className="truncate text-[15px] font-semibold text-text">{candidate.title || candidate.id}</h3>
           <p className="mt-1 line-clamp-2 text-sm leading-5 text-text-muted">{candidate.body || t('card.noSummary')}</p>
           <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-text-subtle">
-            <span>{formatDate(candidate.created)}</span>
+            <span>{formatDateTime(candidate.created)}</span>
             {confidenceLabel(candidate) && (
               <span className={`rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${
                 (() => {
@@ -866,46 +907,10 @@ export function CurateRoute() {
     () => clusters.filter((cluster) => cluster.member_ids.length > 1),
     [clusters],
   );
-  const queueItems = useMemo<CandidateQueueItem[]>(() => {
-    const visibleById = new Map(visibleCandidates.map((candidate) => [candidate.id, candidate]));
-    const clusterByMember = new Map<string, ClusterInfo>();
-    for (const cluster of multiClusters) {
-      for (const memberId of cluster.member_ids) {
-        if (!clusterByMember.has(memberId)) clusterByMember.set(memberId, cluster);
-      }
-    }
-
-    const items: CandidateQueueItem[] = [];
-    const consumedIds = new Set<string>();
-    for (const candidate of visibleCandidates) {
-      if (consumedIds.has(candidate.id)) continue;
-      const cluster = clusterByMember.get(candidate.id);
-      if (cluster) {
-        const memberIds = [...new Set(cluster.member_ids.filter((id) => visibleById.has(id)))];
-        const members = memberIds
-          .map((id) => visibleById.get(id))
-          .filter((member): member is Candidate => Boolean(member));
-        if (members.length > 1) {
-          const representative = members.find((member) => member.id === cluster.representative) || members[0];
-          items.push({
-            kind: 'cluster',
-            cluster: {
-              ...cluster,
-              representative: representative.id,
-              representative_title: representative.title || representative.id,
-              member_ids: members.map((member) => member.id),
-              member_titles: members.map((member) => member.title || member.id),
-            },
-          });
-          for (const member of members) consumedIds.add(member.id);
-          continue;
-        }
-      }
-      items.push({ kind: 'candidate', candidate });
-      consumedIds.add(candidate.id);
-    }
-    return items;
-  }, [multiClusters, visibleCandidates]);
+  const queueItems = useMemo(
+    () => buildQueueItems(visibleCandidates, multiClusters),
+    [multiClusters, visibleCandidates],
+  );
   const queuePage = useMemo(
     () => paginateItems(queueItems, currentPage, PAGE_SIZE),
     [currentPage, queueItems],
@@ -924,12 +929,19 @@ export function CurateRoute() {
     const clampedPage = statusFilter === 'auto_rejected' ? autoRejectedPage.page : queuePage.page;
     if (currentPage !== clampedPage) setCurrentPage(clampedPage);
   }, [autoRejectedPage.page, currentPage, queuePage.page, statusFilter]);
-  // Bulk Ask AI only targets what the advisor has not answered yet (nor is answering now);
-  // a cron opinion is an older model's and stays askable. Re-asking one card: its detail panel.
-  const askableBulk = visibleCandidates.filter((candidate) => canAskAdvice(candidate)
-    && candidate.curator_source !== 'on_demand' && !advisor.isBusy(candidate.id));
+  // The counter is cards, not raw candidates: a cluster renders one card and exposes Ask AI
+  // only for its representative. Re-asking an existing opinion stays in the detail panel.
+  const askableBulk = queueItems.flatMap((item) => {
+    const candidate = item.kind === 'cluster'
+      ? candidates.find((entry) => entry.id === item.cluster.representative)
+      : item.candidate;
+    return candidate && canAskAdvice(candidate) && !candidate.curator_verdict && !advisor.isBusy(candidate.id)
+      ? [candidate]
+      : [];
+  });
   const reviewableIds = visibleCandidates.filter((candidate) => canAskAdvice(candidate) && !!candidate.curator_verdict).map((candidate) => candidate.id);
-  const pendingCount = candidates.filter((candidate) => candidate.status === 'pending' || candidate.status === 'pending_review' || candidate.status === 'pre_approved').length;
+  const pendingCandidates = candidates.filter((candidate) => ['pending', 'pending_review', 'pre_approved'].includes(candidate.status));
+  const pendingCount = buildQueueItems(pendingCandidates, multiClusters).length;
   const approvedCount = candidates.filter((candidate: Candidate) => ['approved', 'promoted', 'applied', 'created', 'merged'].includes(candidate.status)).length;
   const averageConfidence = candidates.length
     ? candidates.reduce((sum, candidate) => sum + (confidenceValue(candidate) || 0), 0) / candidates.length
@@ -1196,23 +1208,23 @@ function CandidateDetail({
   return <div className="flex max-h-[92vh] min-h-0 flex-col">
     <div className="flex items-start justify-between gap-4 border-b border-white/[0.08] p-5"><div className="min-w-0"><div className="flex items-center gap-2"><span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ${statusTone(candidate.status)}`}>{statusLabel(candidate.status)}</span>{candidate.type && <span className="text-[11px] uppercase tracking-[0.12em] text-text-subtle">{candidate.type}</span>}</div><h2 id="curate-candidate-title" className="mt-3 truncate text-xl font-semibold tracking-tight text-text">{candidate.title || candidate.id}</h2><p className="mt-2 break-all font-mono text-[10px] text-text-subtle">{candidate.id}</p></div><button type="button" aria-label={t('detail.closeAria')} onClick={onClose} className="rounded-xl p-2 text-text-muted hover:bg-white/[0.06] hover:text-text"><X size={19} /></button></div>
     <div className="min-h-0 overflow-y-auto p-5"><div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-<Meta label={t('detail.created')} value={formatDate(candidate.created)} />
+<Meta label={t('detail.created')} value={formatDateTime(candidate.created)} />
 <Meta label={t('detail.confidence')} value={confidenceLabel(candidate) ?? '—'} />
 {(candidate.status === 'pending_review' || candidate.status === 'pending' || candidate.status === 'pre_approved') ? (<>
 <Meta label={t('detail.jevVerdict')} value={candidate.jev_choice ? `${candidate.jev_choice} · ${candidate.jev_confidence ? Math.round(Number(candidate.jev_confidence) * 100) + '%' : ''}` : t('detail.notClassified')} />
 <Meta label={t('detail.pipeline')} value={t('detail.awaiting')} />
 </>) : IN_VAULT_STATUSES.has(candidate.status) ? (<>
-<Meta label={t('detail.inVault')} value={formatDate(candidate.promoted_at || candidate.created)} />
+<Meta label={t('detail.inVault')} value={formatDateTime(candidate.promoted_at || candidate.created)} />
 <Meta label={t('detail.jevVerdict')} value={candidate.jev_choice ? `${candidate.jev_choice} · ${candidate.jev_confidence ? Math.round(Number(candidate.jev_confidence) * 100) + '%' : ''}` : candidate.status === 'applied' ? t('detail.preGate') : t('detail.human')} />
 </>) : candidate.status === 'rejected' ? (<>
-<Meta label={t('detail.rejected')} value={formatDate(candidate.rejected_at)} />
+<Meta label={t('detail.rejected')} value={formatDateTime(candidate.rejected_at)} />
 <Meta label={t('detail.jevVerdict')} value={candidate.jev_choice ? candidate.jev_choice : t('detail.human')} />
 </>) : candidate.status === 'auto_rejected' ? (<>
-<Meta label={t('detail.autoRejected')} value={formatDate(candidate.auto_rejected_at)} />
+<Meta label={t('detail.autoRejected')} value={formatDateTime(candidate.auto_rejected_at)} />
 <Meta label={t('detail.jevConfidence')} value={candidate.jev_confidence ? Math.round(Number(candidate.jev_confidence) * 100) + '%' : '—'} />
 </>) : (<>
-{candidate.approved_at && <Meta label={t('detail.approved')} value={formatDate(candidate.approved_at)} />}
-{candidate.quarantine_until && <Meta label={t('detail.quarantine')} value={formatDate(candidate.quarantine_until)} />}
+{candidate.approved_at && <Meta label={t('detail.approved')} value={formatDateTime(candidate.approved_at)} />}
+{candidate.quarantine_until && <Meta label={t('detail.quarantine')} value={formatDateTime(candidate.quarantine_until)} />}
 </>)}
 </div>{(candidate.curator_verdict || canAsk) && <CuratorAdvicePanel fields={candidate} live={live} canAsk={canAsk && !!onAsk} onAsk={() => onAsk?.(candidate)} />}<div className="mt-5"><p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-subtle">{t('detail.body')}</p>{fullBody ? <article className="max-h-[32vh] overflow-y-auto rounded-xl border border-white/[0.08] bg-black/10 p-3"><CandidateMarkdown content={fullBody} /></article> : <div className="rounded-xl border border-dashed border-amber-400/25 bg-amber-400/[0.06] p-3 text-sm leading-6 text-amber-100/80">{t('detail.metadataOnly')}</div>}</div>{candidate.sourceNotes?.length ? <div className="mt-5"><p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-subtle">{t('detail.evidence')}</p><div className="space-y-3">{candidate.sourceNotes.map((note) => <section key={note.source} className="rounded-xl border border-white/[0.08] bg-black/10 p-3"><div className="flex items-center justify-between gap-3"><p className="text-sm font-medium text-text">{note.title}</p><span className={`text-[10px] uppercase tracking-[0.12em] ${note.match_type === 'related' ? 'text-amber-300' : note.found ? 'text-emerald-300' : 'text-text-subtle'}`}>{note.match_type === 'related' ? t('detail.related') : note.found ? t('detail.found') : t('detail.missing')}</span></div>{note.found && <p className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap text-xs leading-5 text-text-muted">{note.body}</p>}</section>)}</div></div> : null}{sourceNodeIds.length > 0 && <div className="mt-5"><div className="mb-2"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-subtle">{t('detail.sourceNodes', { count: sourceNodeIds.length })}</p><p className="mt-1 text-xs leading-5 text-text-muted">{t('detail.sourceNodesHint')}</p></div><div className="space-y-1.5">{sourceNodeIds.map((nodeId) => <code key={nodeId} title={nodeId} className="block break-all rounded-lg border border-sky-400/15 bg-sky-400/[0.06] px-2.5 py-2 text-[11px] leading-5 text-sky-200">{nodeId}</code>)}</div></div>}{tags.length > 0 && <DetailList label={t('detail.tags')} items={tags} tone="sky" />}{sources.length > 0 && <DetailList label={t('detail.sourcesSummary')} items={sources} tone="neutral" />}{candidate.rejection_reason && <div className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 p-3"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-rose-300">{t('detail.rejectionFeedback')}</p><p className="mt-2 text-sm leading-5 text-rose-100/80">{candidate.rejection_reason}</p></div>}</div>
     <div className="flex justify-end gap-2 border-t border-white/[0.08] p-4"><Button variant="ghost" onClick={onClose}>{t('common.close')}</Button>{onMerge && isPending && candidate.source === 'session_synthesis' && <Button variant="secondary" disabled={!!actionId} onClick={() => onMerge(candidate)} title={t('detail.mergeTitle')}><GitMerge size={15}/> {t('detail.mergeInto')}</Button>}{isPending && <><Button variant="danger" onClick={() => onReject(candidate)} disabled={actionId === candidate.id}><XCircle size={15} /> {t('detail.reject')}</Button><Button variant="primary" onClick={() => onApprove(candidate)} disabled={actionId === candidate.id}>{actionId === candidate.id ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} {t('detail.approve')}</Button></>}</div>
