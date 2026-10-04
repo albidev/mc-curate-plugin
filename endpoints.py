@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 import handlers
+import curate_merge_validation as merge_validation
 
 
 class PluginError(Exception):
@@ -252,43 +253,30 @@ def restoreAutoRejectedCandidate(body: Dict[str, Any], params: Dict[str, List[st
     return result
 
 
-def _merge_field(body, key, pattern=None):
-    import re
-    value = body.get(key)
-    if not isinstance(value, str) or not value or value != value.strip() or (pattern and not re.fullmatch(pattern, value)):
-        raise PluginError(400, "bad_request", f"Invalid or missing {key}.")
-    return value
-
-
-def _merge_identity(body):
-    return (_merge_field(body, "candidate_id", r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}"),
-            _merge_field(body, "vault", r"[A-Za-z0-9_-]+"))
-
-
 def listMergeTargets(body, params, auth=None):
     data = {key: value[0] for key, value in params.items() if value}
-    cid, vault = _merge_identity(data)
+    cid, vault = merge_validation.identity(data)
     return handlers.list_merge_targets(cid, vault, data.get("q", ""))
 
 
 def previewSynthesisMerge(body, params, auth=None):
-    cid, vault = _merge_identity(body)
-    return handlers.preview_merge(cid, vault, _merge_field(body, "target_node_id"))
+    cid, vault = merge_validation.identity(body)
+    return handlers.preview_merge(cid, vault, merge_validation.field(body, "target_node_id"))
 
 
 def mergeSynthesisCandidate(body, params, auth=None):
-    cid, vault = _merge_identity(body)
+    cid, vault = merge_validation.identity(body)
     if body.get("confirmed") is not True:
         raise PluginError(400, "confirmation_required", "Explicit confirmed:true is required.")
     reconciliation = {}
     if "reconciliation_id" in body or "conflict_confirmed" in body:
         if body.get("conflict_confirmed") is not True:
             raise PluginError(400, "conflict_confirmation_required", "Explicit conflict_confirmed:true is required.")
-        reconciliation = {"reconciliation_id": _merge_field(body, "reconciliation_id", r"rec-[0-9a-f]{32}"),
+        reconciliation = {"reconciliation_id": merge_validation.field(body, "reconciliation_id", r"rec-[0-9a-f]{32}"),
                           "conflict_confirmed": True}
-    return handlers.merge_candidate(cid, vault, _merge_field(body, "target_node_id"),
-        _merge_field(body, "candidate_revision", r"[0-9a-f]{64}"),
-        _merge_field(body, "target_revision", r"[0-9a-f]{64}"), True, **reconciliation)
+    return handlers.merge_candidate(cid, vault, merge_validation.field(body, "target_node_id"),
+        merge_validation.field(body, "candidate_revision", r"[0-9a-f]{64}"),
+        merge_validation.field(body, "target_revision", r"[0-9a-f]{64}"), True, **reconciliation)
 
 
 def startReconciliation(body, params, auth=None):

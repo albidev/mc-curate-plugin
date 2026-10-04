@@ -11,6 +11,7 @@ import time
 
 import advisor_jobs
 import bdh_client
+import curate_merge_validation as merge_validation
 import handlers
 import reconcile_prompt
 import reconcile_lease
@@ -83,10 +84,9 @@ def _reconcile(job: dict, path: Path) -> dict:
 
 def start(body: dict) -> dict:
     # Use the same strict identity syntax as the merge endpoint; don't repair client tokens.
-    import endpoints
-    cid, vault = endpoints._merge_identity(body)
-    node = endpoints._merge_field(body, 'target_node_id')
-    revisions = {k: endpoints._merge_field(body, k, r'[0-9a-f]{64}')
+    cid, vault = merge_validation.identity(body)
+    node = merge_validation.field(body, 'target_node_id')
+    revisions = {k: merge_validation.field(body, k, r'[0-9a-f]{64}')
                  for k in ('candidate_revision', 'target_revision')}
     candidate, vault = handlers._merge_candidate(cid, vault)
     preview = handlers.preview_merge(cid, vault, node)
