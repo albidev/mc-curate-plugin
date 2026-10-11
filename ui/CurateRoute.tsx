@@ -421,7 +421,7 @@ function ClusterCard({
           <InlineActionButton
             variant="primary"
             onClick={() => onApprove(rep || clusterToCandidate(cluster))}
-            disabled={isProcessing}
+            disabled={!!actionId}
             title={t('cluster.approve')}
           >
             <Check size={14} className={isProcessing ? 'animate-pulse' : ''} />
@@ -429,7 +429,7 @@ function ClusterCard({
           <InlineActionButton
             variant="danger"
             onClick={() => onReject(rep || clusterToCandidate(cluster))}
-            disabled={isProcessing}
+            disabled={!!actionId}
             title={t('cluster.reject')}
           >
             <XCircle size={14} />
@@ -452,10 +452,13 @@ function clusterToCandidate(cluster: ClusterInfo): Candidate {
 
 function buildQueueItems(candidates: Candidate[], clusters: ClusterInfo[]): CandidateQueueItem[] {
   const visibleById = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+  // Cluster metadata can lag a confirmed decision. Reviewed cards render alone.
+  const isPending = (candidate: Candidate) => ['pending', 'pending_review', 'pre_approved'].includes(candidate.status);
   const clusterByMember = new Map<string, ClusterInfo>();
   for (const cluster of clusters) {
     for (const memberId of cluster.member_ids) {
-      if (!clusterByMember.has(memberId)) clusterByMember.set(memberId, cluster);
+      const member = visibleById.get(memberId);
+      if (member && isPending(member) && !clusterByMember.has(memberId)) clusterByMember.set(memberId, cluster);
     }
   }
 
@@ -465,7 +468,10 @@ function buildQueueItems(candidates: Candidate[], clusters: ClusterInfo[]): Cand
     if (consumedIds.has(candidate.id)) continue;
     const cluster = clusterByMember.get(candidate.id);
     if (cluster) {
-      const memberIds = [...new Set(cluster.member_ids.filter((id) => visibleById.has(id)))];
+      const memberIds = [...new Set(cluster.member_ids.filter((id) => {
+        const member = visibleById.get(id);
+        return member && isPending(member);
+      }))];
       const members = memberIds
         .map((id) => visibleById.get(id))
         .filter((member): member is Candidate => Boolean(member));
@@ -613,7 +619,7 @@ function CandidateCard({
             <InlineActionButton
               variant="primary"
               onClick={(e) => { e.stopPropagation(); onApprove(candidate); }}
-              disabled={isProcessing}
+              disabled={!!actionId}
               title={t('card.approve')}
             >
               <Check size={14} className={isProcessing ? 'animate-pulse' : ''} />
@@ -621,7 +627,7 @@ function CandidateCard({
             <InlineActionButton
               variant="danger"
               onClick={(e) => { e.stopPropagation(); onReject(candidate); }}
-              disabled={isProcessing}
+              disabled={!!actionId}
               title={t('card.reject')}
             >
               <XCircle size={14} />
@@ -657,6 +663,7 @@ export function CurateRoute() {
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [actionId, setActionId] = useState<string | null>(null);
+  const mutationInFlight = useRef(false);
   const [refreshing, setRefreshing] = useState(false);
   const [rejecting, setRejecting] = useState<Candidate | null>(null);
   const [merging, setMerging] = useState<(Candidate & {vault_id: string}) | null>(null);
@@ -713,52 +720,54 @@ export function CurateRoute() {
     setToken(localStorage.getItem('mission-control-token') || '');
   }, []);
 
+  const loadGeneration = useRef(0);
+  const loadController = useRef<AbortController | null>(null);
+  const viewScope = useRef({ vault: selectedVault, token });
+  viewScope.current = { vault: selectedVault, token };
+
   const load = useCallback(async (quiet = false) => {
+    const generation = ++loadGeneration.current;
+    loadController.current?.abort();
+    const controller = new AbortController();
+    loadController.current = controller;
+    const current = () => !controller.signal.aborted && generation === loadGeneration.current
+      && viewScope.current.vault === selectedVault && viewScope.current.token === token;
+    const options = { signal: controller.signal };
     if (!quiet) setLoading(true);
     setRefreshing(true);
     setError(null);
+
+    // Optional metadata must never gate publishing the candidate queue.
+    void requestJSON<{ vaults: VaultInfo[]; default_vault?: string | null; config_error?: string | null }>('/candidates/vaults', token, options)
+      .then((payload) => {
+        if (!current()) return;
+        setConfigError(payload.config_error || null);
+        setVaults(payload.vaults || []);
+        if (!selectedVault && payload.default_vault) setSelectedVault(payload.default_vault);
+      })
+      .catch((cause) => { if (current()) setError(cause instanceof Error ? cause.message : tr('load.failed')); });
+    void requestJSON<{ clusters: ClusterInfo[]; sidecar?: string }>(selectedVault ? `/candidates/clustered?vault=${encodeURIComponent(selectedVault)}` : '/candidates/clustered', token, options)
+      .then((payload) => {
+        if (!current()) return;
+        setClusters(payload.clusters || []);
+        setPipelineAvailable(payload.sidecar !== 'unavailable');
+      })
+      .catch(() => { if (current()) { setClusters([]); setPipelineAvailable(false); } });
     try {
-      const candidatePath = selectedVault
-        ? `/candidates?vault=${encodeURIComponent(selectedVault)}`
-        : '/candidates';
-      const [candidateResult, vaultResult, clusterResult] = await Promise.allSettled([
-        requestJSON<{ candidates: Candidate[]; vault?: string | null }>(candidatePath, token),
-        requestJSON<{ vaults: VaultInfo[]; default_vault?: string | null; config_error?: string | null }>('/candidates/vaults', token),
-        requestJSON<{ clusters: ClusterInfo[]; sidecar?: string }>(selectedVault ? `/candidates/clustered?vault=${encodeURIComponent(selectedVault)}` : '/candidates/clustered', token),
-      ]);
-      if (vaultResult.status === 'rejected') throw vaultResult.reason;
-      const vaultPayload = vaultResult.value;
-      setConfigError(vaultPayload.config_error || null);
-      setVaults(vaultPayload.vaults || []);
-      if (clusterResult.status === 'fulfilled') {
-        setClusters(clusterResult.value.clusters || []);
-        setPipelineAvailable(clusterResult.value.sidecar !== 'unavailable');
-      } else {
-        // clustering unavailable (older backend / pipeline down): flat list
-        setClusters([]);
-        setPipelineAvailable(false);
-      }
-      if (candidateResult.status === 'rejected') {
-        setCandidates([]);
-        throw candidateResult.reason;
-      }
-      const candidatePayload = candidateResult.value;
-      const nextCandidates = candidatePayload.candidates || [];
-      const nextVault = selectedVault
-        || candidatePayload.vault
-        || vaultPayload.default_vault
-        || nextCandidates.find((candidate) => candidate.vault_id)?.vault_id
-        || '';
+      const path = selectedVault ? `/candidates?vault=${encodeURIComponent(selectedVault)}` : '/candidates';
+      const payload = await requestJSON<{ candidates: Candidate[]; vault?: string | null }>(path, token, options);
+      if (!current()) return;
+      const nextCandidates = payload.candidates || [];
       setCandidates(nextCandidates);
+      const nextVault = selectedVault || payload.vault || nextCandidates.find((candidate) => candidate.vault_id)?.vault_id || '';
       if (!selectedVault && nextVault) setSelectedVault(nextVault);
       notifyCurateStatusChanged();
-      // Details are opt-in: never open a candidate automatically on load.
-      setSelectedId(null);
+      if (!quiet) setSelectedId(null);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : tr('load.failed'));
+      // Keep the last known queue on a transient refresh failure.
+      if (current()) setError(cause instanceof Error ? cause.message : tr('load.failed'));
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (current()) { setLoading(false); setRefreshing(false); }
     }
   }, [selectedVault, token]);
 
@@ -784,7 +793,11 @@ export function CurateRoute() {
   }, [load, token]);
 
   useEffect(() => {
+    setCandidates([]);
+    setClusters([]);
+    setPipelineAvailable(false);
     if (token) void load();
+    return () => { ++loadGeneration.current; loadController.current?.abort(); };
   }, [load, token]);
 
   useEffect(() => {
@@ -823,6 +836,9 @@ export function CurateRoute() {
   };
 
   const mergedSuccessfully = (result: MergeResult) => {
+    if (!merging || viewScope.current.vault !== selectedVault || viewScope.current.token !== token) return;
+    const candidateId = merging.id;
+    if (result.applied) setCandidates((current) => current.map((entry) => entry.id === candidateId ? { ...entry, status: 'merged' } : entry));
     setNotice(result.status === 'noop' ? tr('merge.noopNotice', { path: result.note_path }) : tr('merge.doneNotice', { path: result.note_path }));
     setMerging(null);
     notifyCurateStatusChanged();
@@ -830,8 +846,9 @@ export function CurateRoute() {
   };
 
   const performAction = async (candidate: Candidate, action: 'approve' | 'reject', reason = '') => {
-    if (actionId || merging) return;
+    if (mutationInFlight.current || actionId || merging) return;
     if (action === 'approve' && candidate.source === 'session_synthesis' && candidate.curator_merge_target) { openMerge(candidate); return; }
+    mutationInFlight.current = true;
     setActionId(candidate.id);
     setError(null);
     const vault = selectedVault || candidate.vault_id || '';
@@ -842,13 +859,21 @@ export function CurateRoute() {
           body: JSON.stringify({ id: candidate.id, vault, ...(reason ? { reason } : {}) }),
         },
       );
+      if (viewScope.current.vault !== selectedVault || viewScope.current.token !== token) return;
+      if (result.success && result.candidate?.id === candidate.id) {
+        const confirmed = result.candidate;
+        setCandidates((current) => current.map((entry) => entry.id === candidate.id ? { ...entry, ...confirmed } : entry));
+      }
       setNotice(action === 'approve' ? approvalNotice(result.candidate ?? candidate, currentLocale()) : tr('reject.doneNotice'));
       setRejecting(null);
       setRejectReason('');
-      await load(true);
+      // The write is complete. Reconciliation is not part of its pending state.
+      void load(true);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : tr(action === 'approve' ? 'action.approveFailed' : 'action.rejectFailed'));
+      if (viewScope.current.vault === selectedVault && viewScope.current.token === token)
+        setError(cause instanceof Error ? cause.message : tr(action === 'approve' ? 'action.approveFailed' : 'action.rejectFailed'));
     } finally {
+      mutationInFlight.current = false;
       setActionId(null);
     }
   };
@@ -1226,7 +1251,7 @@ function CandidateDetail({
 {candidate.quarantine_until && <Meta label={t('detail.quarantine')} value={formatDateTime(candidate.quarantine_until)} />}
 </>)}
 </div>{(candidate.curator_verdict || canAsk) && <CuratorAdvicePanel fields={candidate} live={live} canAsk={canAsk && !!onAsk} onAsk={() => onAsk?.(candidate)} />}<div className="mt-5"><p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-subtle">{t('detail.body')}</p>{fullBody ? <article className="max-h-[32vh] overflow-y-auto rounded-xl border border-white/[0.08] bg-black/10 p-3"><CandidateMarkdown content={fullBody} /></article> : <div className="rounded-xl border border-dashed border-amber-400/25 bg-amber-400/[0.06] p-3 text-sm leading-6 text-amber-100/80">{t('detail.metadataOnly')}</div>}</div>{candidate.sourceNotes?.length ? <div className="mt-5"><p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-text-subtle">{t('detail.evidence')}</p><div className="space-y-3">{candidate.sourceNotes.map((note) => <section key={note.source} className="rounded-xl border border-white/[0.08] bg-black/10 p-3"><div className="flex items-center justify-between gap-3"><p className="text-sm font-medium text-text">{note.title}</p><span className={`text-[10px] uppercase tracking-[0.12em] ${note.match_type === 'related' ? 'text-amber-300' : note.found ? 'text-emerald-300' : 'text-text-subtle'}`}>{note.match_type === 'related' ? t('detail.related') : note.found ? t('detail.found') : t('detail.missing')}</span></div>{note.found && <p className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap text-xs leading-5 text-text-muted">{note.body}</p>}</section>)}</div></div> : null}{sourceNodeIds.length > 0 && <div className="mt-5"><div className="mb-2"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-subtle">{t('detail.sourceNodes', { count: sourceNodeIds.length })}</p><p className="mt-1 text-xs leading-5 text-text-muted">{t('detail.sourceNodesHint')}</p></div><div className="space-y-1.5">{sourceNodeIds.map((nodeId) => <code key={nodeId} title={nodeId} className="block break-all rounded-lg border border-sky-400/15 bg-sky-400/[0.06] px-2.5 py-2 text-[11px] leading-5 text-sky-200">{nodeId}</code>)}</div></div>}{tags.length > 0 && <DetailList label={t('detail.tags')} items={tags} tone="sky" />}{sources.length > 0 && <DetailList label={t('detail.sourcesSummary')} items={sources} tone="neutral" />}{candidate.rejection_reason && <div className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 p-3"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-rose-300">{t('detail.rejectionFeedback')}</p><p className="mt-2 text-sm leading-5 text-rose-100/80">{candidate.rejection_reason}</p></div>}</div>
-    <div className="flex justify-end gap-2 border-t border-white/[0.08] p-4"><Button variant="ghost" onClick={onClose}>{t('common.close')}</Button>{onMerge && isPending && candidate.source === 'session_synthesis' && <Button variant="secondary" disabled={!!actionId} onClick={() => onMerge(candidate)} title={t('detail.mergeTitle')}><GitMerge size={15}/> {t('detail.mergeInto')}</Button>}{isPending && <><Button variant="danger" onClick={() => onReject(candidate)} disabled={actionId === candidate.id}><XCircle size={15} /> {t('detail.reject')}</Button><Button variant="primary" onClick={() => onApprove(candidate)} disabled={actionId === candidate.id}>{actionId === candidate.id ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} {t('detail.approve')}</Button></>}</div>
+    <div className="flex justify-end gap-2 border-t border-white/[0.08] p-4"><Button variant="ghost" onClick={onClose}>{t('common.close')}</Button>{onMerge && isPending && candidate.source === 'session_synthesis' && <Button variant="secondary" disabled={!!actionId} onClick={() => onMerge(candidate)} title={t('detail.mergeTitle')}><GitMerge size={15}/> {t('detail.mergeInto')}</Button>}{isPending && <><Button variant="danger" onClick={() => onReject(candidate)} disabled={!!actionId}><XCircle size={15} /> {t('detail.reject')}</Button><Button variant="primary" onClick={() => onApprove(candidate)} disabled={!!actionId}>{actionId === candidate.id ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} {t('detail.approve')}</Button></>}</div>
   </div>;
 }
 
