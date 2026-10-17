@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Bell, ListChecks, Loader2 } from 'lucide-react';
 import { tr, useT } from './i18n';
+import { createSingleFlightPoller } from './single-flight-poller';
 interface MCPluginAttentionProps {
   onActiveChange: (count: number) => void;
 }
@@ -13,10 +14,11 @@ interface VaultInfo {
 
 const API_BASE = '/api/local';
 
-async function getJSON<T>(path: string, token: string): Promise<T> {
+async function getJSON<T>(path: string, token: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     cache: 'no-store',
+    signal,
   });
   if (!response.ok) throw new Error(tr('attention.unavailable', { status: response.status }));
   return response.json() as Promise<T>;
@@ -28,6 +30,12 @@ export function CurateAttention({ onActiveChange }: MCPluginAttentionProps) {
   const [pending, setPending] = useState(0);
   const [byVault, setByVault] = useState<Array<{ id: string; label: string; count: number }>>([]);
   const [loading, setLoading] = useState(true);
+  // Hosts may pass a fresh callback every render; keep it out of the polling
+  // effect so a re-render never restarts the poll (and never adds a request).
+  const onActiveChangeRef = useRef(onActiveChange);
+  useEffect(() => {
+    onActiveChangeRef.current = onActiveChange;
+  }, [onActiveChange]);
 
   useEffect(() => {
     setToken(localStorage.getItem('mission-control-token') || '');
@@ -35,35 +43,32 @@ export function CurateAttention({ onActiveChange }: MCPluginAttentionProps) {
 
   useEffect(() => {
     if (!token) return;
-    let cancelled = false;
-    const refresh = async () => {
-      try {
-        const vaultPayload = await getJSON<{ vaults: VaultInfo[] }>('/candidates/vaults', token);
+    const poller = createSingleFlightPoller({
+      intervalMs: 30_000,
+      load: (signal) => getJSON<{ vaults: VaultInfo[] }>('/candidates/vaults', token, signal),
+      onResult: (vaultPayload) => {
         const counts = (vaultPayload.vaults || []).map((vault) => ({
           id: vault.id,
           label: vault.label,
           count: vault.pending_count || 0,
         }));
-        if (cancelled) return;
         const active = counts.filter((item) => item.count > 0);
         const total = active.reduce((sum, item) => sum + item.count, 0);
         setByVault(active);
         setPending(total);
-        onActiveChange(total);
-      } catch {
-        if (!cancelled) {
-          setByVault([]);
-          setPending(0);
-          onActiveChange(0);
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 30_000);
-    return () => { cancelled = true; window.clearInterval(timer); };
-  }, [onActiveChange, token]);
+        onActiveChangeRef.current(total);
+        setLoading(false);
+      },
+      onError: () => {
+        setByVault([]);
+        setPending(0);
+        onActiveChangeRef.current(0);
+        setLoading(false);
+      },
+    });
+    poller.start();
+    return () => poller.stop();
+  }, [token]);
 
   if (loading) return <div className="flex items-center gap-2 text-xs text-text-muted"><Loader2 className="h-3.5 w-3.5 animate-spin" /> {t('attention.loading')}</div>;
   if (pending === 0) return null;
