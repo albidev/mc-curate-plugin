@@ -16,10 +16,12 @@ Quarantine is configurable (default 1 day) via VB_QUARANTINE_DAYS.
 """
 from __future__ import annotations
 
+import copy
 import os
 import re
 import shutil
 import textwrap
+import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -212,6 +214,39 @@ def _vaults_file() -> Path:
     return _vault_brain_dir() / "curate-vaults.yaml"
 
 
+def _yaml_safe_load(text: str) -> Any:
+    """yaml.safe_load backed by libyaml when available (~10x faster, same safe schema)."""
+    import yaml
+    loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+    return yaml.load(text, Loader=loader)  # noqa: S506 - SafeLoader/CSafeLoader only
+
+
+# Config files are re-read on every vault/candidate lookup (once per candidate
+# card before this cache), so parse them once per on-disk version.
+_YAML_FILE_CACHE: Dict[str, Tuple[Tuple[int, int], Any]] = {}
+_YAML_FILE_CACHE_LOCK = threading.Lock()
+
+
+def _cached_yaml_file(path: Path) -> Any:
+    """Parse a YAML file once per (mtime_ns, size); return a private deep copy.
+
+    Raises OSError / yaml.YAMLError like a direct read+parse would, so callers
+    keep their existing error reporting.
+    """
+    stat = path.stat()
+    stamp = (stat.st_mtime_ns, stat.st_size)
+    key = str(path)
+    with _YAML_FILE_CACHE_LOCK:
+        hit = _YAML_FILE_CACHE.get(key)
+    if hit is None or hit[0] != stamp:
+        data = _yaml_safe_load(path.read_text(encoding="utf-8"))
+        with _YAML_FILE_CACHE_LOCK:
+            _YAML_FILE_CACHE[key] = (stamp, data)
+    else:
+        data = hit[1]
+    return copy.deepcopy(data)
+
+
 def _routing_file() -> Path:
     return get_hermes_home() / "vault-routing.yaml"
 
@@ -235,7 +270,7 @@ def read_vaults_config() -> Tuple[Dict[str, Any], Optional[str]]:
     except ImportError:
         return {}, f"{path.name} found but PyYAML is not installed in the Mission Control telemetry Python."
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        data = _cached_yaml_file(path) or {}
     except (OSError, yaml.YAMLError) as exc:
         return {}, f"{path.name} could not be read: {str(exc).splitlines()[0][:200]}"
     if not isinstance(data, dict):
@@ -258,8 +293,7 @@ def _load_routing_vaults() -> Dict[str, Dict[str, Any]]:
     if not path.exists():
         return {}
     try:
-        import yaml
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        data = _cached_yaml_file(path) or {}
         return {str(k): dict(v) for k, v in (data.get("vaults") or {}).items()}
     except Exception:
         return {}
@@ -415,8 +449,7 @@ def _parse_frontmatter(text: str) -> Dict[str, Any]:
         return {}
     raw = parts[1]
     try:
-        import yaml
-        parsed = yaml.safe_load(raw) or {}
+        parsed = _yaml_safe_load(raw) or {}
         if isinstance(parsed, dict):
             return {str(k): v for k, v in parsed.items()}
     except Exception:
@@ -447,8 +480,7 @@ def _body_metadata(body: str) -> Dict[str, Any]:
     """Recover structured fields when the generator emitted YAML in the body."""
     candidate = body.strip().strip("`").strip()
     try:
-        import yaml
-        parsed = yaml.safe_load(candidate)
+        parsed = _yaml_safe_load(candidate)
         if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
             return {str(k): v for k, v in parsed[0].items()}
         if isinstance(parsed, dict):
@@ -740,8 +772,9 @@ def list_candidates(status: Optional[str] = None, vault: Optional[str] = None) -
     d = _candidates_dir(vault)
     legacy: List[Dict[str, Any]] = []
     if d is not None and d.exists():
+        vault_root = _candidate_vault_root(vault)
         for p in sorted(d.glob("*.md")):
-            c = _read_candidate(p, vault_root=_candidate_vault_root(vault))
+            c = _read_candidate(p, vault_root=vault_root)
             if c and (status is None or c.get("status") == status):
                 legacy.append(c)
     bdh_candidates = _load_bdh_candidates(vault, status)
