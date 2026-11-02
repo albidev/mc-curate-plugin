@@ -2,5 +2,5 @@
 # The plugin is a Python HTTP surface loaded by the Mission Control plugin
 # loader. Runtime needs the standard library plus PyYAML (curate-vaults.yaml and
 # legacy candidate frontmatter); it must be importable by the telemetry Python.
-pytest>=9.1.1
+pytest>=9.2.0
 PyYAML>=6.0.3
